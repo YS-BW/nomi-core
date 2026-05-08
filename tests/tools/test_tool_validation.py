@@ -1,3 +1,4 @@
+import json
 import shlex
 import subprocess
 import sys
@@ -73,6 +74,42 @@ class DecoratedSampleTool(Tool):
         return f"ok:{kwargs['count']}"
 
 
+class RawNestedSchemaTool(Tool):
+    @property
+    def name(self) -> str:
+        return "raw_nested"
+
+    @property
+    def description(self) -> str:
+        return "raw nested schema tool"
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "config": {
+                    "type": "object",
+                    "properties": {
+                        "label": StringSchema("label text", min_length=1),
+                        "tags": {
+                            "type": "array",
+                            "items": StringSchema("tag item"),
+                        },
+                    },
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": StringSchema("dynamic value"),
+                    },
+                }
+            },
+            "required": [],
+        }
+
+    async def execute(self, **kwargs: Any) -> str:
+        return "ok"
+
+
 def test_schema_validate_value_matches_tool_validate_params() -> None:
     """ObjectSchema.validate_value 与 validate_json_schema_value、Tool.validate_params 一致。"""
     root = tool_parameters_schema(
@@ -137,6 +174,66 @@ def test_tool_parameters_returns_fresh_copy_per_access() -> None:
 
     first["properties"]["query"]["minLength"] = 99
     assert tool.parameters["properties"]["query"]["minLength"] == 2
+
+
+def test_tool_to_schema_recursively_normalizes_nested_schema_objects() -> None:
+    schema = RawNestedSchemaTool().to_schema()
+
+    payload = json.dumps(schema, ensure_ascii=False)
+
+    assert "StringSchema" not in payload
+    assert schema["function"]["parameters"]["properties"]["config"]["properties"]["label"]["type"] == "string"
+    assert (
+        schema["function"]["parameters"]["properties"]["config"]["additionalProperties"]["items"]["type"]
+        == "string"
+    )
+
+
+def test_tool_parameters_decorator_normalizes_nested_raw_schema_objects() -> None:
+    @tool_parameters(
+        {
+            "type": "object",
+            "properties": {
+                "meta": {
+                    "type": "object",
+                    "properties": {
+                        "title": StringSchema("title"),
+                    },
+                }
+            },
+            "required": [],
+        }
+    )
+    class _DecoratedRawTool(Tool):
+        @property
+        def name(self) -> str:
+            return "decorated_raw"
+
+        @property
+        def description(self) -> str:
+            return "decorated raw"
+
+        async def execute(self, **kwargs: Any) -> str:
+            return "ok"
+
+    schema = _DecoratedRawTool().to_schema()
+    payload = json.dumps(schema, ensure_ascii=False)
+
+    assert "StringSchema" not in payload
+    assert schema["function"]["parameters"]["properties"]["meta"]["properties"]["title"]["type"] == "string"
+
+
+def test_tool_parameters_schema_supports_description_field_name() -> None:
+    schema = tool_parameters_schema(
+        description=StringSchema("skill 描述，会写入 frontmatter", min_length=1),
+        required=[],
+    )
+
+    payload = json.dumps(schema, ensure_ascii=False)
+
+    assert "StringSchema" not in payload
+    assert schema["properties"]["description"]["type"] == "string"
+    assert schema["properties"]["description"]["description"] == "skill 描述，会写入 frontmatter"
 
 
 async def test_registry_executes_decorated_tool_end_to_end() -> None:

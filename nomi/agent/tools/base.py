@@ -1,7 +1,7 @@
 """Agent 工具抽象与参数校验基础设施。"""
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from copy import deepcopy
 from typing import Any, TypeVar
 
@@ -123,10 +123,33 @@ class Schema(ABC):
         # 先尝试 to_json_schema，避免把实现该方法的 Schema 对象误当成普通 dict。
         to_js = getattr(value, "to_json_schema", None)
         if callable(to_js):
-            return to_js()
-        if isinstance(value, dict):
-            return value
+            return Schema.fragment(to_js())
+        if isinstance(value, Mapping):
+            return {str(key): Schema.normalize_json_schema(item) for key, item in value.items()}
         raise TypeError(f"Expected schema object or dict, got {type(value).__name__}")
+
+    @staticmethod
+    def normalize_json_schema(value: Any) -> Any:
+        """递归把 Schema 对象或容器转换为纯 JSON 兼容结构。
+
+        参数:
+            value: Schema 实例、字典、列表或 JSON 原始值。
+
+        返回:
+            仅包含 dict / list / str / int / float / bool / None 的结构。
+        """
+        to_js = getattr(value, "to_json_schema", None)
+        if callable(to_js):
+            return Schema.normalize_json_schema(to_js())
+        if isinstance(value, Mapping):
+            return {str(key): Schema.normalize_json_schema(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [Schema.normalize_json_schema(item) for item in value]
+        if isinstance(value, tuple):
+            return [Schema.normalize_json_schema(item) for item in value]
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        raise TypeError(f"Expected JSON-serializable schema value, got {type(value).__name__}")
 
     @abstractmethod
     def to_json_schema(self) -> dict[str, Any]:
@@ -325,12 +348,17 @@ class Tool(ABC):
         返回:
             OpenAI 风格工具描述字典。
         """
+        schema = Schema.normalize_json_schema(self.parameters)
+        if not isinstance(schema, dict):
+            raise TypeError(
+                f"Tool parameters must be an object schema, got {type(schema).__name__}"
+            )
         return {
             "type": "function",
             "function": {
                 "name": self.name,
                 "description": self.description,
-                "parameters": self.parameters,
+                "parameters": schema,
             },
         }
 
@@ -354,7 +382,7 @@ def tool_parameters(schema: dict[str, Any]) -> Callable[[type[_ToolT]], type[_To
         返回:
             注入参数属性后的工具类。
         """
-        frozen = deepcopy(schema)
+        frozen = Schema.fragment(schema)
 
         @property
         def parameters(self: Any) -> dict[str, Any]:

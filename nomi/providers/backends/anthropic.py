@@ -12,6 +12,7 @@ from typing import Any
 
 import json_repair
 
+from nomi.agent.tools.base import Schema
 from nomi.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
 _ALNUM = string.ascii_letters + string.digits
@@ -278,9 +279,12 @@ class AnthropicProvider(LLMProvider):
         result = []
         for tool in tools:
             func = tool.get("function", tool)
+            input_schema = Schema.normalize_json_schema(
+                func.get("parameters", {"type": "object", "properties": {}})
+            )
             entry: dict[str, Any] = {
                 "name": func.get("name", ""),
-                "input_schema": func.get("parameters", {"type": "object", "properties": {}}),
+                "input_schema": input_schema,
             }
             desc = func.get("description")
             if desc:

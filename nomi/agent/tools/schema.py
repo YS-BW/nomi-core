@@ -287,6 +287,12 @@ class ObjectSchema(Schema):
             无返回值。
         """
         self._properties = dict(properties or {}, **kwargs)
+        # 这里兼容“字段名叫 description”的工具参数定义。
+        # 当 description 不是字符串时，把它视为字段定义而不是根描述。
+        if not isinstance(description, str):
+            if "description" not in self._properties:
+                self._properties["description"] = description
+            description = ""
         self._required = list(required or [])
         self._root_description = description
         self._additional_properties = additional_properties
@@ -308,7 +314,7 @@ class ObjectSchema(Schema):
         if self._root_description:
             out["description"] = self._root_description
         if self._additional_properties is not None:
-            out["additionalProperties"] = self._additional_properties
+            out["additionalProperties"] = Schema.normalize_json_schema(self._additional_properties)
         return out
 
 

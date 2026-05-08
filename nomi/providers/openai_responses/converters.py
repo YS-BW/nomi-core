@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from nomi.agent.tools.base import Schema
+
 
 def convert_messages(messages: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
     """把消息列表转换为 Responses API 的输入结构。
@@ -98,11 +100,13 @@ def convert_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     converted: list[dict[str, Any]] = []
     for tool in tools:
-        fn = (tool.get("function") or {}) if tool.get("type") == "function" else tool
+        fn = tool.get("function") if isinstance(tool.get("function"), dict) else None
+        if fn is None:
+            fn = tool
         name = fn.get("name")
         if not name:
             continue
-        params = fn.get("parameters") or {}
+        params = Schema.normalize_json_schema(fn.get("parameters") or {})
         converted.append({
             "type": "function",
             "name": name,
