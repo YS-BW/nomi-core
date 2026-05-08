@@ -1,0 +1,150 @@
+"""工具提示格式化。"""
+
+from __future__ import annotations
+
+import re
+
+from nomi.utils.path import abbreviate_path
+
+# 工具名映射到格式化规则：(参数键、模板、是否路径、是否命令)
+_TOOL_FORMATS: dict[str, tuple[list[str], str, bool, bool]] = {
+    "read_file":  (["path", "file_path"],              "read {}",     True,  False),
+    "write_file": (["path", "file_path"],              "write {}",    True,  False),
+    "edit":       (["file_path", "path"],              "edit {}",     True,  False),
+    "glob":       (["pattern"],                        'glob "{}"',   False, False),
+    "grep":       (["pattern"],                        'grep "{}"',   False, False),
+    "exec":       (["command"],                        "$ {}",        False, True),
+    "web_search": (["query"],                          'search "{}"', False, False),
+    "web_fetch":  (["url"],                            "fetch {}",    True,  False),
+    "list_dir":   (["path"],                           "ls {}",       True,  False),
+    "task_create_after": (["instruction"],             'task_create_after("{}")', False, False),
+    "task_create_at": (["instruction"],                'task_create_at("{}")', False, False),
+    "task_create_daily": (["instruction"],             'task_create_daily("{}")', False, False),
+    "task_create_every": (["instruction"],             'task_create_every("{}")', False, False),
+    "task_get": (["task_id"],                          'task_get("{}")', False, False),
+    "task_delete": (["task_id"],                       'task_delete("{}")', False, False),
+    "task_enable": (["task_id"],                       'task_enable("{}")', False, False),
+    "task_disable": (["task_id"],                      'task_disable("{}")', False, False),
+    "task_update_instruction": (["task_id"],           'task_update_instruction("{}")', False, False),
+    "task_reschedule_after": (["task_id"],             'task_reschedule_after("{}")', False, False),
+    "task_reschedule_at": (["task_id"],                'task_reschedule_at("{}")', False, False),
+    "task_reschedule_daily": (["task_id"],             'task_reschedule_daily("{}")', False, False),
+    "task_reschedule_every": (["task_id"],             'task_reschedule_every("{}")', False, False),
+}
+
+# 匹配命令中的路径片段，兼容带引号且包含空格的路径。
+_PATH_IN_CMD_RE = re.compile(
+    r'"(?P<double>(?:[A-Za-z]:[/\\]|~/|/)[^"]+)"'
+    r"|'(?P<single>(?:[A-Za-z]:[/\\]|~/|/)[^']+)'"
+    r"|(?P<bare>(?:[A-Za-z]:[/\\]|~/|(?<=\s)/)[^\s;&|<>\"']+)"
+)
+
+
+def format_tool_hints(tool_calls: list) -> str:
+    """把工具调用格式化为简洁提示文本。"""
+    if not tool_calls:
+        return ""
+
+    formatted = []
+    for tc in tool_calls:
+        fmt = _TOOL_FORMATS.get(tc.name)
+        if fmt:
+            formatted.append(_fmt_known(tc, fmt))
+        elif tc.name.startswith("mcp_"):
+            formatted.append(_fmt_mcp(tc))
+        else:
+            formatted.append(_fmt_fallback(tc))
+
+    hints = []
+    for hint in formatted:
+        if hints and hints[-1][0] == hint:
+            hints[-1] = (hint, hints[-1][1] + 1)
+        else:
+            hints.append((hint, 1))
+
+    return ", ".join(
+        f"{h} \u00d7 {c}" if c > 1 else h for h, c in hints
+    )
+
+
+def _get_args(tc) -> dict:
+    """Extract args dict from tc.arguments, handling list/dict/None/empty."""
+    if tc.arguments is None:
+        return {}
+    if isinstance(tc.arguments, list):
+        return tc.arguments[0] if tc.arguments else {}
+    if isinstance(tc.arguments, dict):
+        return tc.arguments
+    return {}
+
+
+def _extract_arg(tc, key_args: list[str]) -> str | None:
+    """Extract the first available value from preferred key names."""
+    args = _get_args(tc)
+    if not isinstance(args, dict):
+        return None
+    for key in key_args:
+        val = args.get(key)
+        if isinstance(val, str) and val:
+            return val
+    for val in args.values():
+        if isinstance(val, str) and val:
+            return val
+    return None
+
+
+def _fmt_known(tc, fmt: tuple) -> str:
+    """Format a registered tool using its template."""
+    val = _extract_arg(tc, fmt[0])
+    if val is None:
+        return tc.name
+    if fmt[2]:  # 路径参数需要额外缩写
+        val = abbreviate_path(val)
+    elif fmt[3]:  # 命令参数需要尽量保留结构
+        val = _abbreviate_command(val)
+    return fmt[1].format(val)
+
+
+def _abbreviate_command(cmd: str, max_len: int = 40) -> str:
+    """Abbreviate paths in a command string, then truncate."""
+    def _replace_path(match: re.Match[str]) -> str:
+        if match.group("double") is not None:
+            return f'"{abbreviate_path(match.group("double"), max_len=25)}"'
+        if match.group("single") is not None:
+            return f"'{abbreviate_path(match.group('single'), max_len=25)}'"
+        return abbreviate_path(match.group("bare"), max_len=25)
+
+    abbreviated = _PATH_IN_CMD_RE.sub(_replace_path, cmd)
+    if len(abbreviated) <= max_len:
+        return abbreviated
+    return abbreviated[:max_len - 1] + "\u2026"
+
+
+def _fmt_mcp(tc) -> str:
+    """Format MCP tool as server::tool."""
+    name = tc.name
+    if "__" in name:
+        parts = name.split("__", 1)
+        server = parts[0].removeprefix("mcp_")
+        tool = parts[1]
+    else:
+        rest = name.removeprefix("mcp_")
+        parts = rest.split("_", 1)
+        server = parts[0] if parts else rest
+        tool = parts[1] if len(parts) > 1 else ""
+    if not tool:
+        return name
+    args = _get_args(tc)
+    val = next((v for v in args.values() if isinstance(v, str) and v), None)
+    if val is None:
+        return f"{server}::{tool}"
+    return f'{server}::{tool}("{abbreviate_path(val, 40)}")'
+
+
+def _fmt_fallback(tc) -> str:
+    """Original formatting logic for unregistered tools."""
+    args = _get_args(tc)
+    val = next(iter(args.values()), None) if isinstance(args, dict) else None
+    if not isinstance(val, str):
+        return tc.name
+    return f'{tc.name}("{abbreviate_path(val, 40)}")' if len(val) > 40 else f'{tc.name}("{val}")'

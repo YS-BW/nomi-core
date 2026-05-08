@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Nomi Remote Client Demo</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <section class="panel">
+          <h1>Nomi Remote Demo</h1>
+          <p class="muted">最小远程客户端验证器，用来直接联调 `nomi remote` 🔌</p>
+          <div class="form-grid">
+            <label>
+              Host
+              <input id="host" type="text" value="127.0.0.1" />
+            </label>
+            <label>
+              Port
+              <input id="port" type="number" value="8765" />
+            </label>
+            <label class="span-2">
+              Token
+              <input id="token" type="password" placeholder="remote auth token" />
+            </label>
+            <label class="span-2">
+              Session ID
+              <input id="sessionId" type="text" value="desktop:demo" />
+            </label>
+          </div>
+          <div class="button-row">
+            <button id="connectBtn">连接</button>
+            <button id="disconnectBtn" class="secondary">断开</button>
+          </div>
+          <div id="connectionStatus" class="status-pill disconnected">disconnected</div>
+          <p id="serverInfo" class="muted small">浏览器会通过 `?token=` 方式建立 WebSocket</p>
+        </section>
+
+        <section class="panel">
+          <h2>Sessions</h2>
+          <div class="button-row">
+            <button id="refreshSessionsBtn" class="secondary">刷新列表</button>
+            <button id="loadHistoryBtn" class="secondary">加载历史</button>
+          </div>
+          <select id="sessionList" size="8"></select>
+        </section>
+
+        <section class="panel">
+          <h2>状态</h2>
+          <pre id="statusPanel" class="status-box">暂无状态</pre>
+        </section>
+      </aside>
+
+      <main class="main">
+        <section class="panel grow">
+          <div class="chat-header">
+            <div>
+              <h2>Messages</h2>
+              <p id="activeSessionLabel" class="muted">当前会话：desktop:demo</p>
+            </div>
+            <div class="button-row">
+              <button id="getStatusBtn" class="secondary">刷新状态</button>
+              <button id="interruptBtn" class="danger">中断当前轮</button>
+            </div>
+          </div>
+          <div id="messages" class="messages"></div>
+        </section>
+
+        <section class="panel">
+          <h2>事件与进度</h2>
+          <div id="eventLog" class="event-log"></div>
+        </section>
+
+        <section class="panel">
+          <h2>发送消息</h2>
+          <p class="muted small">支持 `Cmd/Ctrl + Enter` 快捷发送 ✨</p>
+          <textarea
+            id="messageInput"
+            rows="4"
+            placeholder="输入一条消息，然后发送到当前 session"
+          ></textarea>
+          <div class="button-row">
+            <button id="sendBtn">发送</button>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
