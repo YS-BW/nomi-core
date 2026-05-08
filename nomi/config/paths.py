@@ -4,17 +4,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from nomi.config.loader import get_config_path
 from nomi.utils.fs import ensure_dir
 
 NOMI_HOME_DIR = Path.home() / ".nomi"
 DEFAULT_WORKSPACE_DIR = NOMI_HOME_DIR / "workspace"
 DEFAULT_HISTORY_PATH = NOMI_HOME_DIR / "history" / "cli_history"
 GLOBAL_SKILLS_DIR = NOMI_HOME_DIR / "skills"
+DEFAULT_EXTERNAL_SKILL_ROOTS = ("~/.claude/skills", "~/.codex/skills")
 
 
 def get_data_dir() -> Path:
     """返回当前实例的运行时数据目录。"""
+    from nomi.config.loader import get_config_path
+
     return ensure_dir(get_config_path().parent)
 
 

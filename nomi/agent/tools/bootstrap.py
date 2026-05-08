@@ -9,7 +9,13 @@ from nomi.agent.tools.image_analysis import AnalyzeImageTool
 from nomi.agent.tools.registry import ToolRegistry
 from nomi.agent.tools.search import GlobTool, GrepTool
 from nomi.agent.tools.shell import ExecTool
-from nomi.agent.tools.skill_tools import InstallSkillTool, ListSkillsTool, UninstallSkillTool
+from nomi.agent.tools.skill_tools import (
+    CreateSkillTool,
+    FindSkillsTool,
+    InstallSkillTool,
+    ListSkillsTool,
+    UninstallSkillTool,
+)
 from nomi.agent.tools.tasks import (
     TaskCreateAfterTool,
     TaskCreateAtTool,
@@ -124,5 +130,7 @@ def register_default_tools(
         )
         registry.register(WebFetchTool(proxy=web_config.proxy))
     registry.register(ListSkillsTool())
+    registry.register(FindSkillsTool())
     registry.register(InstallSkillTool())
+    registry.register(CreateSkillTool())
     registry.register(UninstallSkillTool())

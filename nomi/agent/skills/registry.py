@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from nomi.agent.skills.manager import SkillManager
 from nomi.agent.skills.models import SkillSpec
 from nomi.agent.skills.parser import parse_skill_metadata
 from nomi.config.paths import GLOBAL_SKILLS_DIR
@@ -17,6 +18,7 @@ class SkillRegistry:
     def __init__(
         self,
         root: Path | None = None,
+        manager: SkillManager | None = None,
     ):
         """初始化 Skill 注册表。
 
@@ -27,6 +29,7 @@ class SkillRegistry:
             无返回值。
         """
         self.root = (root or GLOBAL_SKILLS_DIR).expanduser()
+        self.manager = manager or SkillManager(root=self.root)
 
     def scan(self) -> list[SkillSpec]:
         """扫描全局 Skill 目录。

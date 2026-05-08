@@ -31,6 +31,7 @@ Nomi 当前阶段的目标不变：
 - workspace 模板初始化
 - 全局 skills 扫描与 prompt 注入
 - skill 的安装、卸载、列表管理
+- 外部 skill root 可在安装时一次性导入到 `~/.nomi/skills`
 - `cron` 调度的 CRUD 四工具协议
 - 最小工具调用闭环
 - DeepSeek tool-call transcript 的 `reasoning_content` 协议修复
@@ -162,6 +163,7 @@ utils         = 低层通用小工具
 - skill 管理 owner 在 `agent/skills`
 - 裸 `/skill` 已移除，只保留 `/skill list|install|uninstall`
 - agent 默认工具现在已经包含 `list_skills` / `install_skill` / `uninstall_skill` / `cron_create` / `cron_list` / `cron_delete` / `cron_update`
+- agent 默认工具中的 skill 组现在已经扩成 `list_skills` / `find_skills` / `install_skill` / `create_skill` / `uninstall_skill`
 - 首次 `onboard` 默认 provider 是 `deepseek`
 - 首次 `onboard` 默认模型是 `deepseek-v4-flash`
 - `main` 分支的 `onboard` 不再预装任何业务 skill
@@ -204,6 +206,19 @@ utils         = 低层通用小工具
 - `examples/remote-client/` 协议验证器已完成
 - `nomi-desktop` 当前已经独立出主仓，桌面端后续产品化不再和 Python 主仓同目录推进
 - `remote / desktop` 当前共享协议已经拆到独立 `nomi-protocol` 仓，core 和 desktop 通过外部依赖消费
+- 当前已确认一个 desktop / channel 任务投递限制：
+  - desktop 侧创建任务时，当前仍按 `desktop:{clientId}` session 写入任务目标
+  - channel service 的 `CronService` 启动后只在本进程内持有已加载 job，不会自动热重载后续由 remote / desktop 新建的任务
+  - 因此“在 desktop 创建任务，然后让 channel 默认收到提醒”目前不成立，属于当前代码事实，不是单纯前端显示问题
+- 当前已完成一轮真实模型探测：
+  - 以当前 `mimo-v2.5` 配置直接 `curl` OpenAI 兼容接口，测试了任务工具新增参数后的 tool-call 输出
+  - `delivery_audience: "owner"` 与 `delivery_policy: { mode: "all", excluded_surfaces: [...] }` 两组字段都能被稳定产出
+  - 多工具并列时，模型也能稳定选对 `task_create_after / at / daily / every`
+  - 当前波动主要只在 `instruction` 措辞压缩，不在新增字段本身
+- 若后续要实现“默认全平台提醒，但允许 AI 排除微信/桌面端”，当前更合适的方向是：
+  - 协议层新增 `delivery_audience` 与 `delivery_policy`
+  - agent 任务工具同步暴露这些参数
+  - 但这属于 `nomi-protocol` 改动，按协作规则必须先得到用户明确批准后才能实施
 
 另外还有两条边界必须固定下来：
 
@@ -352,6 +367,7 @@ utils         = 低层通用小工具
 3. `cron` 仍然是应用内调度，不是系统级调度
 4. model catalog 采用静态目录，模型事实变化需要显式更新仓库
 5. 脏工作区下继续推进时，最容易把历史讨论误当成当前代码事实
+6. 当前任务投递仍然偏单会话/单目标语义；在不改 protocol 和任务模型的前提下，desktop 新建任务无法自然收口成“默认全平台提醒”
 
 ## 7. 模块七：多端入口
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 from pathlib import Path
 
 from nomi.agent.skills import SkillManager, SkillRegistry
@@ -179,6 +180,76 @@ def test_install_local_skill_requires_skill_md(tmp_path) -> None:
     assert "SKILL.md" in message
 
 
+def test_sync_external_roots_imports_missing_skill_with_symlink(tmp_path, monkeypatch) -> None:
+    canonical_root = tmp_path / "skills"
+    external_root = tmp_path / ".claude" / "skills"
+    _write_skill(external_root, "demo", "---\nname: Demo\ndescription: 外部来源\n---\n")
+
+    manager = SkillManager(canonical_root, external_roots=[external_root])
+    monkeypatch.setattr(manager, "_should_link_local_skill", lambda: True)
+
+    result = manager.sync_external_roots()
+
+    installed_dir = canonical_root / "demo"
+    assert result["imported"] == ["demo"]
+    assert installed_dir.is_symlink()
+    assert installed_dir.resolve() == (external_root / "demo").resolve()
+
+
+def test_sync_external_roots_falls_back_to_copy_when_symlink_fails(tmp_path, monkeypatch) -> None:
+    canonical_root = tmp_path / "skills"
+    external_root = tmp_path / ".codex" / "skills"
+    _write_skill(external_root, "demo", "---\nname: Demo\ndescription: 外部来源\n---\n")
+
+    manager = SkillManager(canonical_root, external_roots=[external_root])
+    monkeypatch.setattr(manager, "_should_link_local_skill", lambda: True)
+
+    def _raise_oserror(*args, **kwargs):
+        raise OSError("symlink failed")
+
+    monkeypatch.setattr(Path, "symlink_to", _raise_oserror)
+
+    result = manager.sync_external_roots()
+
+    installed_dir = canonical_root / "demo"
+    assert result["imported"] == ["demo"]
+    assert installed_dir.exists()
+    assert installed_dir.is_symlink() is False
+    assert (installed_dir / "SKILL.md").exists()
+
+
+def test_sync_external_roots_skips_existing_canonical_skill(tmp_path) -> None:
+    canonical_root = tmp_path / "skills"
+    _write_skill(canonical_root, "demo", "---\nname: Canonical\n---\n")
+    external_root = tmp_path / ".claude" / "skills"
+    _write_skill(external_root, "demo", "---\nname: External\n---\n")
+
+    manager = SkillManager(canonical_root, external_roots=[external_root])
+
+    result = manager.sync_external_roots()
+
+    assert result["imported"] == []
+    assert result["skipped"] == ["demo"]
+    assert (canonical_root / "demo" / "SKILL.md").read_text(encoding="utf-8").startswith(
+        "---\nname: Canonical"
+    )
+
+
+def test_registry_scan_does_not_auto_import_external_skill(tmp_path, monkeypatch) -> None:
+    canonical_root = tmp_path / "skills"
+    external_root = tmp_path / ".claude" / "skills"
+    _write_skill(external_root, "demo", "---\nname: Demo\ndescription: 外部来源\n---\n")
+
+    manager = SkillManager(canonical_root, external_roots=[external_root])
+    monkeypatch.setattr(manager, "_should_link_local_skill", lambda: False)
+    registry = SkillRegistry(canonical_root, manager=manager)
+
+    skills = registry.scan()
+
+    assert skills == []
+    assert (canonical_root / "demo").exists() is False
+
+
 def test_install_download_archive_succeeds(tmp_path, monkeypatch) -> None:
     archive_root = tmp_path / "archive-root"
     archive_root.mkdir()
@@ -232,6 +303,29 @@ def test_install_github_tree_skill_succeeds(tmp_path, monkeypatch) -> None:
     assert (tmp_path / "skills" / "skill-creator" / "SKILL.md").exists()
 
 
+def test_install_skills_package_imports_into_canonical_root(tmp_path, monkeypatch) -> None:
+    canonical_root = tmp_path / "skills"
+    external_root = tmp_path / ".codex" / "skills"
+    _write_skill(external_root, "finder", "---\nname: Finder\ndescription: 外部生态\n---\n")
+
+    def _fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout="installed",
+            stderr="",
+        )
+
+    monkeypatch.setattr("subprocess.run", _fake_run)
+    manager = SkillManager(canonical_root, external_roots=[external_root])
+
+    ok, message = manager.install("owner/repo@finder")
+
+    assert ok is True
+    assert "已从 skills 包导入" in message
+    assert (canonical_root / "finder" / "SKILL.md").exists()
+
+
 def test_install_rejects_existing_skill(tmp_path) -> None:
     skills_root = tmp_path / "skills"
     _write_skill(skills_root, "demo", "---\nname: Demo\n---\n")
@@ -243,6 +337,28 @@ def test_install_rejects_existing_skill(tmp_path) -> None:
 
     assert ok is False
     assert "请先执行 `/skill uninstall demo`" in message
+
+
+def test_create_skill_scaffold_writes_skill_md(tmp_path) -> None:
+    manager = SkillManager(tmp_path / "skills")
+
+    ok, message = manager.create("demo-skill", description="用于测试 skill 创建")
+
+    assert ok is True
+    assert "已创建 skill" in message
+    skill_file = tmp_path / "skills" / "demo-skill" / "SKILL.md"
+    content = skill_file.read_text(encoding="utf-8")
+    assert "name: demo-skill" in content
+    assert "description: 用于测试 skill 创建" in content
+
+
+def test_create_skill_rejects_invalid_key(tmp_path) -> None:
+    manager = SkillManager(tmp_path / "skills")
+
+    ok, message = manager.create("Demo Skill", description="bad key")
+
+    assert ok is False
+    assert "skill_key 只能包含小写字母、数字和连字符" in message
 
 
 def test_install_rejects_ambiguous_archive(tmp_path, monkeypatch) -> None:
@@ -274,6 +390,22 @@ def test_uninstall_removes_skill_and_registry_scan_updates(tmp_path) -> None:
     assert ok is True
     assert "已卸载 skill" in message
     assert SkillRegistry(skills_root).scan() == []
+
+
+def test_uninstall_preserves_external_source(tmp_path) -> None:
+    canonical_root = tmp_path / "skills"
+    external_root = tmp_path / ".claude" / "skills"
+    _write_skill(external_root, "demo", "---\nname: Demo\n---\n")
+
+    manager = SkillManager(canonical_root, external_roots=[external_root])
+    manager.sync_external_roots()
+
+    ok, message = manager.uninstall("demo")
+
+    assert ok is True
+    assert "已卸载 skill" in message
+    assert (external_root / "demo" / "SKILL.md").exists()
+    assert not (canonical_root / "demo").exists()
 
 
 def test_uninstall_symlink_skill_only_removes_link(tmp_path, monkeypatch) -> None:

@@ -2,6 +2,81 @@
 
 > 这份文件是 Nomi 项目的统一项目指导文件，给后续接手的 agent 使用，不属于正式用户文档。
 
+## Repo Ownership
+
+当前三仓已经拆分，仓库职责固定如下：
+
+- `nomi-core`
+  - Python 核心仓
+  - 负责 `cli / runtime / agent / session / providers / tools / cron / channel / remote server / config`
+- `nomi-desktop`
+  - Tauri + React 桌面端仓
+  - 负责 `desktop transport / state / UI / window behavior / local persistence / build`
+- `nomi-protocol`
+  - 共享协议仓
+  - 负责 remote wire contract、schema、版本与共享类型
+
+当前 Codex 分工固定如下：
+
+- 本仓 Codex 默认 owner 是 `nomi-core`
+- desktop 侧由另一个 Codex 负责 `/Users/lixinlv/Doing/nomi-desktop`
+- `nomi-protocol` 默认由 core owner 负责修改和发起版本升级
+
+## Cross-repo Collaboration Rules
+
+涉及 desktop 的需求时，先判断是不是 core 仓职责：
+
+- 如果只是桌面 UI、桌面状态归并、Tauri 窗口、前端展示、desktop 本地存储问题：
+  - 不要直接修改 `nomi-desktop`
+  - 先联系 desktop Codex，由它负责落地
+- 如果需要 core 配合 desktop：
+  - 先明确协议、字段、错误语义、验收方式
+  - 再在本仓实现 core 侧改动
+- 如果需要协议变更：
+  - 先与 desktop Codex 对齐
+  - 由 core owner 修改 `nomi-protocol`
+  - 再同步升级 `nomi-core`
+  - 最后通知 desktop Codex 升级依赖并接入
+
+协议变更职责固定如下：
+
+- `nomi-protocol` 的 owner 是 core owner
+- desktop owner 有协议需求提出权和验收权
+- 不单独设一个常驻 protocol owner
+- 任何 `nomi-protocol` 改动都必须先获得用户明确同意，未经批准不得修改协议仓或协议语义
+
+协议变更流程固定如下：
+
+1. 由提出需求的一方先写清楚：
+   - 为什么要改
+   - 涉及哪个 command / event
+   - 新增或修改哪些字段
+   - 兼容性要求
+   - desktop / core 各自如何验收
+2. 由 core owner 判断：
+   - 是否只需要本地派生，不必改协议
+   - 是否需要改 `nomi-protocol`
+   - 是否需要 `protocol + core + desktop` 三仓联动
+3. 如果需要改协议：
+   - 先征得用户明确同意
+   - 先修改 `nomi-protocol`
+   - 再修改 `nomi-core`
+   - 最后由 desktop 升级协议依赖并完成消费
+
+固定禁止事项：
+
+- 不主动修改 `/Users/lixinlv/Doing/nomi-desktop` 中的代码
+- 不绕过 desktop Codex 直接改桌面端实现
+- 不在未同步 desktop 的情况下擅自修改会影响 desktop 的 remote 协议语义
+
+固定协作要求：
+
+- 任何跨仓需求都要先主动沟通，再各自修改自己负责的仓
+- 对外汇报时要明确区分：
+  - `core 已完成`
+  - `等待 desktop 配合`
+  - `需要 protocol 同步`
+
 ## Project Overview
 
 Nomi 当前是一个 nanobot 风格的终端 AI 助手项目。
@@ -81,6 +156,7 @@ Nomi 当前是一个 nanobot 风格的终端 AI 助手项目。
 - 会话持久化
 - 工作区启动模板加载
 - 全局 `skills` 扫描与 prompt 注入
+- `~/.claude/skills` / `~/.codex/skills` 等外部 skill root 可在安装时一次性导入到 `~/.nomi/skills`
 - `cron_create / cron_list / cron_delete / cron_update` 工具驱动的应用内调度、后台轮询、到点执行
 - 文档化的模块教程
 

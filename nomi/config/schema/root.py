@@ -12,6 +12,7 @@ from .agent import AgentsConfig
 from .channel import ChannelConfig
 from .provider import ProvidersConfig
 from .remote import RemoteConfig
+from .skills import SkillsConfig
 from .tools import ToolsConfig
 from .transcription import TranscriptionConfig
 
@@ -22,6 +23,7 @@ class Config(BaseSettings):
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    skills: SkillsConfig = Field(default_factory=SkillsConfig)
     transcription: TranscriptionConfig = Field(default_factory=TranscriptionConfig)
     channel: ChannelConfig = Field(default_factory=ChannelConfig)
     remote: RemoteConfig = Field(default_factory=RemoteConfig)

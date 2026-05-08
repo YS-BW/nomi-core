@@ -22,6 +22,17 @@ Skills 是 Nomi 当前的“全局任务说明包”机制 📦
 
 路径常量在 [nomi/config/paths.py](../nomi/config/paths.py#L10-L14)。
 
+它是当前唯一的 canonical root。`SkillRegistry` 只扫描这里，`SkillManager` 也只把这里当成正式安装目录。
+
+系统还支持一组外部 skill roots，默认包括：
+
+```text
+~/.claude/skills
+~/.codex/skills
+```
+
+外部 roots 只作为安装时的一次性导入来源，不作为直接扫描结果输出路径。
+
 ---
 
 ## 一个 skill 的最小结构
@@ -100,6 +111,27 @@ Skills 是 Nomi 当前的“全局任务说明包”机制 📦
 
 通过 `SkillManager` 卸载 skill。
 
+当前只有在安装 skill 包时，才会按需做一次外部 roots 导入：
+
+- 非 Windows：优先创建符号链接
+- Windows：回退为复制
+- 若目标 canonical 路径已存在，则跳过，不覆盖外部来源
+- `list_skills` / `SkillRegistry.scan()` 不会持续自动补回外部 skill
+
+当前模型侧默认工具还包括：
+
+- `list_skills`
+- `find_skills`
+- `install_skill`
+- `create_skill`
+- `uninstall_skill`
+
+其中：
+
+- `find_skills` 会先看本地已安装 skill，再调用 `npx skills find` 搜索外部技能生态
+- `install_skill` 现在除了本地目录、压缩包、Git 链接，也支持 `owner/repo@skill` 这类 skills 包来源
+- `create_skill` 会直接在 `~/.nomi/skills` 下生成最小 `SKILL.md` 脚手架
+
 ---
 
 ## SkillManager 和 SkillRegistry 的边界
@@ -123,6 +155,7 @@ Skills 是 Nomi 当前的“全局任务说明包”机制 📦
 
 - 安装
 - 卸载
+- 在安装外部 skill 包时，把外部 roots 里的结果一次性导入 canonical root
 
 当前文档里不要再把这两者混成一个“大技能系统类”。
 
