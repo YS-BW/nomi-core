@@ -45,10 +45,16 @@
     "enabled": true,
     "host": "127.0.0.1",
     "port": 8765,
-    "authToken": "your-token"
+    "authToken": ""
   }
 }
 ```
+
+说明：
+
+- 第一次启动 `nomi remote run/start/restart` 时，如果 `remote.authToken` 为空，会自动生成一个随机 token 并写回当前配置文件
+- 后续启动只复用这个已保存 token，不会每次重新生成
+- `nomi remote start` 在“已启动 / 已运行”的提示里会直接打印当前 token，方便 desktop 侧接入
 
 启动：
 

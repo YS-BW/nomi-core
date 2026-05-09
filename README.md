@@ -296,10 +296,12 @@ nomi channel restart
     "enabled": true,
     "host": "127.0.0.1",
     "port": 8765,
-    "authToken": "your-token"
+    "authToken": ""
   }
 }
 ```
+
+第一次启动 `nomi remote run/start/restart` 时，如果 `authToken` 为空，会自动生成随机 token 并写回配置；后续启动会复用该 token，并在启动输出里直接显示它。
 
 ### 2. 启动 remote 服务
 

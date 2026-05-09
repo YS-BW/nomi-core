@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import secrets
 import signal
 import subprocess
 import sys
@@ -12,6 +13,7 @@ from pathlib import Path
 import typer
 from loguru import logger
 
+from nomi.config.loader import get_config_path, save_config
 from nomi.config.paths import get_logs_dir
 from nomi.remote.server import RemoteServer
 from nomi.remote.service.state import (
@@ -42,11 +44,15 @@ def start_background_service(config_arg: str | None, workspace: str | None, load
     """后台启动 remote service。"""
     state = get_service_state(loaded_config)
     if state.state == "running":
-        typer.echo(f"remote service 已运行，pid={state.pid}")
+        typer.echo(
+            f"remote service 已运行，pid={state.pid}，token={loaded_config.remote.auth_token}"
+        )
         raise typer.Exit(0)
     if state.state == "stale":
         cleanup_stale_service_files(state.pid_path, state.state_path)
 
+    if loaded_config.remote.enabled:
+        _ensure_remote_auth_token(loaded_config)
     validate_remote_ready(loaded_config)
     logs_dir = get_logs_dir()
     log_path = get_service_log_path()
@@ -82,7 +88,9 @@ def start_background_service(config_arg: str | None, workspace: str | None, load
         process.pid,
         log_path,
     )
-    typer.echo(f"remote service 已启动，pid={process.pid}")
+    typer.echo(
+        f"remote service 已启动，pid={process.pid}，token={loaded_config.remote.auth_token}"
+    )
     typer.echo(f"日志文件：{log_path}")
 
 
@@ -111,6 +119,8 @@ def stop_background_service(config=None) -> None:
 
 async def run_remote_foreground(loaded_config, runtime_factory) -> None:
     """以前台方式运行 remote service。"""
+    if loaded_config.remote.enabled:
+        _ensure_remote_auth_token(loaded_config)
     validate_remote_ready(loaded_config)
     pid = os.getpid()
     pid_path = get_service_pid_path()
@@ -155,3 +165,15 @@ def restart_background_service(config_arg: str | None, workspace: str | None, lo
     elif state.state == "stale":
         cleanup_stale_service_files(state.pid_path, state.state_path)
     start_background_service(config_arg, workspace, loaded_config)
+
+
+def _ensure_remote_auth_token(loaded_config) -> str:
+    """为 remote 自动补齐可用 token，并持久化到配置文件。"""
+    current = str(loaded_config.remote.auth_token or "").strip()
+    if current:
+        return current
+
+    token = f"nomi-remote-{secrets.token_hex(16)}"
+    loaded_config.remote.auth_token = token
+    save_config(loaded_config, get_config_path())
+    return token
