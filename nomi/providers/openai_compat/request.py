@@ -6,11 +6,8 @@ import hashlib
 from typing import TYPE_CHECKING, Any
 
 from nomi.providers.base import LLMProvider
+from nomi.providers.openai_compat.common import ALLOWED_MSG_KEYS, is_direct_openai_base
 from nomi.providers.openai_responses import convert_messages, convert_tools
-from nomi.providers.openai_compat.common import (
-    ALLOWED_MSG_KEYS,
-    is_direct_openai_base,
-)
 
 if TYPE_CHECKING:
     from nomi.providers.backends.openai_compat import OpenAICompatProvider
@@ -126,8 +123,7 @@ def build_kwargs(
 
     kwargs: dict[str, Any] = {
         "model": model_name,
-        "messages": sanitize_messages(
-            provider,
+        "messages": provider._sanitize_messages(
             provider._sanitize_empty_content(messages),
         ),
     }
@@ -229,8 +225,7 @@ def build_responses_body(
 ) -> dict[str, Any]:
     """构造 Responses API 请求体。"""
     model_name = model or provider.default_model
-    sanitized_messages = sanitize_messages(
-        provider,
+    sanitized_messages = provider._sanitize_messages(
         provider._sanitize_empty_content(messages),
     )
     instructions, input_items = convert_messages(sanitized_messages)

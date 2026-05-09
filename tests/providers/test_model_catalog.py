@@ -18,6 +18,15 @@ def test_list_models_returns_mimo_catalog() -> None:
     assert "mimo-v2.5" in names
 
 
+def test_list_models_returns_deepseek_catalog() -> None:
+    """DeepSeek provider 应返回内置模型目录。"""
+    models = list_models("deepseek")
+
+    names = [item.name for item in models]
+    assert "deepseek-v4-flash" in names
+    assert "deepseek-v4-pro" in names
+
+
 def test_find_model_accepts_prefixed_alias() -> None:
     """带 provider 前缀的模型名应能命中目录条目。"""
     model = find_model("anthropic/claude-sonnet-4-20250514")

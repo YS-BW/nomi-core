@@ -32,6 +32,9 @@ def build_provider(config: Config) -> LLMProvider:
     elif backend == "mimo":
         if not provider_config or not provider_config.api_key:
             raise ValueError("No API key configured for provider 'mimo'.")
+    elif backend == "deepseek":
+        if not provider_config or not provider_config.api_key:
+            raise ValueError("No API key configured for provider 'deepseek'.")
     elif backend == "openai_compat" and not model.startswith("bedrock/"):
         needs_key = not (provider_config and provider_config.api_key)
         exempt = spec and (spec.is_local or spec.is_direct)
@@ -59,6 +62,16 @@ def build_provider(config: Config) -> LLMProvider:
         from nomi.providers.backends.mimo import MiMoProvider
 
         provider = MiMoProvider(
+            api_key=provider_config.api_key if provider_config else None,
+            api_base=resolution.api_base,
+            default_model=model,
+            extra_headers=provider_config.extra_headers if provider_config else None,
+            spec=spec,
+        )
+    elif backend == "deepseek":
+        from nomi.providers.backends.deepseek import DeepSeekProvider
+
+        provider = DeepSeekProvider(
             api_key=provider_config.api_key if provider_config else None,
             api_base=resolution.api_base,
             default_model=model,

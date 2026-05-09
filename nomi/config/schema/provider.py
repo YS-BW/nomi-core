@@ -19,6 +19,7 @@ class ProvidersConfig(Base):
     """LLM providers 配置集合。"""
 
     custom: ProviderConfig = Field(default_factory=ProviderConfig)
+    deepseek: ProviderConfig = Field(default_factory=ProviderConfig)
     mimo: ProviderConfig = Field(default_factory=ProviderConfig)
     azure_openai: ProviderConfig = Field(default_factory=ProviderConfig)
     anthropic: ProviderConfig = Field(default_factory=ProviderConfig)

@@ -18,6 +18,32 @@ class ModelSpec:
 
 
 _STABLE_PROVIDER_MODELS: dict[str, tuple[ModelSpec, ...]] = {
+    "deepseek": (
+        ModelSpec(
+            provider_name="deepseek",
+            name="deepseek-v4-flash",
+            aliases=("deepseek/deepseek-v4-flash",),
+            recommended_context_window_tokens=65_536,
+        ),
+        ModelSpec(
+            provider_name="deepseek",
+            name="deepseek-v4-pro",
+            aliases=("deepseek/deepseek-v4-pro",),
+            recommended_context_window_tokens=65_536,
+        ),
+        ModelSpec(
+            provider_name="deepseek",
+            name="deepseek-chat",
+            aliases=("deepseek/deepseek-chat",),
+            recommended_context_window_tokens=64_000,
+        ),
+        ModelSpec(
+            provider_name="deepseek",
+            name="deepseek-reasoner",
+            aliases=("deepseek/deepseek-reasoner",),
+            recommended_context_window_tokens=64_000,
+        ),
+    ),
     "mimo": (
         ModelSpec(
             provider_name="mimo",

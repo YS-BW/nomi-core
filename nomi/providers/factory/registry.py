@@ -72,6 +72,16 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         backend="openai_compat",
         is_direct=True,
     ),
+    # DeepSeek 独立 backend：默认只需要 API Key，且需要兼容其 thinking/tool replay 语义。
+    ProviderSpec(
+        name="deepseek",
+        keywords=("deepseek",),
+        env_key="DEEPSEEK_API_KEY",
+        display_name="DeepSeek",
+        backend="deepseek",
+        detect_by_base_keyword="deepseek",
+        default_api_base="https://api.deepseek.com",
+    ),
     # MiMo 独立 backend，虽然接口兼容 OpenAI，但请求/流式/工具调用策略不同。
     ProviderSpec(
         name="mimo",

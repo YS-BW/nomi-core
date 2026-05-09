@@ -80,6 +80,34 @@ def test_build_provider_applies_default_generation_settings() -> None:
     assert provider.generation.reasoning_effort == "medium"
 
 
+def test_build_provider_uses_deepseek_backend_with_default_base() -> None:
+    """DeepSeek provider 只填 apiKey 时也应落到官方默认地址。"""
+    config = Config.model_validate(
+        {
+            "providers": {
+                "deepseek": {
+                    "apiKey": "deepseek-test-key",
+                }
+            },
+            "agents": {
+                "defaults": {
+                    "provider": "deepseek",
+                    "model": "deepseek-v4-flash",
+                }
+            },
+        }
+    )
+
+    with patch("nomi.providers.backends.openai_compat.AsyncOpenAI"):
+        provider = build_provider(config)
+
+    assert provider.__class__.__name__ == "DeepSeekProvider"
+    assert provider.get_default_model() == "deepseek-v4-flash"
+    assert provider._spec is not None
+    assert provider._spec.name == "deepseek"
+    assert provider._effective_base == "https://api.deepseek.com"
+
+
 def test_build_provider_rejects_unknown_forced_provider() -> None:
     """未知强制 provider 应立即报错。"""
     config = Config()
@@ -96,4 +124,21 @@ def test_build_provider_rejects_missing_api_key_for_remote_provider() -> None:
     config.agents.defaults.model = "gpt-4o"
 
     with pytest.raises(ValueError, match="No API key configured for provider 'openai'"):
+        build_provider(config)
+
+
+def test_build_provider_rejects_missing_api_key_for_deepseek() -> None:
+    """DeepSeek 缺少 apiKey 时应在装配阶段直接报错。"""
+    config = Config.model_validate(
+        {
+            "agents": {
+                "defaults": {
+                    "provider": "deepseek",
+                    "model": "deepseek-v4-flash",
+                }
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match="No API key configured for provider 'deepseek'"):
         build_provider(config)

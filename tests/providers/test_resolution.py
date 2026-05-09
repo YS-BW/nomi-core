@@ -126,6 +126,31 @@ def test_resolution_uses_forced_provider_and_infers_default_api_base() -> None:
     assert resolution.api_base == "http://localhost:11434/v1"
 
 
+def test_resolution_uses_forced_deepseek_provider_and_default_base() -> None:
+    """显式配置 DeepSeek 时应自动补官方默认 api_base。"""
+    config = Config.model_validate(
+        {
+            "providers": {
+                "deepseek": {
+                    "apiKey": "deepseek-test-key",
+                }
+            },
+            "agents": {
+                "defaults": {
+                    "provider": "deepseek",
+                    "model": "deepseek-v4-flash",
+                }
+            },
+        }
+    )
+
+    resolution = resolve_provider(config)
+
+    assert resolution.provider_name == "deepseek"
+    assert resolution.backend == "deepseek"
+    assert resolution.api_base == "https://api.deepseek.com"
+
+
 def test_resolution_rejects_unknown_forced_provider() -> None:
     """未知强制 provider 应立即报错。"""
     config = Config()

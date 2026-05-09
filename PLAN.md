@@ -34,6 +34,7 @@ Nomi 当前阶段的目标不变：
 - 外部 skill root 可在安装时一次性导入到 `~/.nomi/skills`
 - `cron` 调度的 CRUD 四工具协议
 - 最小工具调用闭环
+- DeepSeek 独立 provider backend
 - DeepSeek tool-call transcript 的 `reasoning_content` 协议修复
 - 单 runtime、单会话下的真实 interrupt
 - `serve stdio` 第二入口
@@ -168,6 +169,9 @@ utils         = 低层通用小工具
 - 首次 `onboard` 默认模型是 `deepseek-v4-flash`
 - `main` 分支的 `onboard` 不再预装任何业务 skill
 - DeepSeek 的 tool-call transcript 协议修复固定收口在 provider 层
+- DeepSeek 默认官方地址固定为 `https://api.deepseek.com`
+- DeepSeek 现在有独立 `deepseek` provider，不再要求用户通过 `custom + apiBase` 伪装接入
+- `deepseek-reasoner` 当前固定不走工具调用链路，带 tools 时直接返回明确错误
 - `Ctrl+C` 仍然退出交互进程
 - `Esc` 现在是当前交互轮次的真实中断键
 - `Esc` 的监听已固定为“孤立按键判定”，不会把终端控制序列残留到下一次输入

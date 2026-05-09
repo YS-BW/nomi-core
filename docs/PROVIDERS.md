@@ -17,6 +17,8 @@ Nomi 的 provider 子系统，简单理解就是“模型接入层” 🤖
 当前实际存在的 provider 配置段是：
 
 - `custom`
+- `deepseek`
+- `mimo`
 - `azure_openai`
 - `anthropic`
 - `openai`
@@ -154,6 +156,8 @@ provider 解析逻辑在：
 
 真正不是 `openai_compat` 的只有：
 
+- `deepseek`
+- `mimo`
 - `anthropic`
 - `azure_openai`
 
@@ -201,6 +205,58 @@ provider 解析逻辑在：
 - `ovms`
 
 ---
+
+## DeepSeek 专用接入
+
+DeepSeek 现在不再建议通过 `custom` 伪装接入。
+
+当前已经有独立的 `deepseek` provider：
+
+- 配置段：`providers.deepseek`
+- 默认地址：`https://api.deepseek.com`
+- backend：`DeepSeekProvider`
+
+因此常规配置只需要填 `apiKey`：
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "provider": "deepseek",
+      "model": "deepseek-v4-flash"
+    }
+  },
+  "providers": {
+    "deepseek": {
+      "apiKey": "你的 key"
+    }
+  }
+}
+```
+
+如果你填了 `apiBase`，会覆盖默认官方地址；否则直接走官方默认地址。
+
+之所以单独做 `deepseek` backend，而不是继续复用 generic `custom`，是因为 DeepSeek 在 thinking mode 下的多轮 tool-call transcript 回放语义和普通 OpenAI 兼容端点不同，尤其是：
+
+- assistant tool-call 消息的空 `content` 不能被改写成 `null`
+- `deepseek-reasoner` 不适合走当前工具调用链路
+
+对应实现入口：
+
+- [nomi/providers/backends/deepseek.py](../nomi/providers/backends/deepseek.py#L1-L179)
+- [nomi/providers/factory/build.py](../nomi/providers/factory/build.py#L10-L81)
+
+### DeepSeek 模型建议
+
+当前推荐：
+
+- 带工具调用：`deepseek-v4-flash` 或 `deepseek-v4-pro`
+- 纯推理文本：`deepseek-reasoner`
+
+当前代码事实：
+
+- `deepseek-v4-*` 在带工具时优先走非流式请求，再把最终文本回灌到 CLI 渲染
+- `deepseek-reasoner` 如果带 tools，会直接返回明确错误，不再把 DeepSeek 的 400 原样漏给用户
 
 ## Mimo 默认配置
 
