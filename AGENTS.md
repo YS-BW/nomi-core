@@ -63,6 +63,25 @@
    - 再修改 `nomi-core`
    - 最后由 desktop 升级协议依赖并完成消费
 
+协议开发与发布流程固定如下：
+
+1. 先在本地修改 `nomi-protocol`
+   - 先更新协议 spec、Python 导出、TypeScript 导出和 `dist/`
+   - 这一步先不要求立即推 GitHub tag
+2. 本地联调阶段，`nomi-core` 和 `nomi-desktop` 都临时指向同一份本地 `nomi-protocol`
+   - core owner 负责用本地协议仓联调 `nomi-core`
+   - desktop owner 负责用同一份本地协议仓联调 `nomi-desktop`
+   - 开发阶段不要一边改本地协议，一边继续拿旧 GitHub tag 做真假混合联调
+3. 只有在 core / desktop 都确认联调通过后，才发布 `nomi-protocol`
+   - 推送协议仓
+   - 打新 tag
+4. 协议 tag 发布完成后，再把两边依赖切回正式 GitHub tag
+   - `nomi-core` 升级到新 tag
+   - `nomi-desktop` 升级到新 tag
+   - 更新各自 lockfile / 依赖锁定结果
+5. 最终回归时，必须以正式 tag 依赖为准再跑一轮验证
+   - 不能只拿本地路径联调通过就视为完成
+
 固定禁止事项：
 
 - 不主动修改 `/Users/lixinlv/Doing/nomi-desktop` 中的代码

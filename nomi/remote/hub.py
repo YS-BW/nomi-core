@@ -55,6 +55,14 @@ class RemoteHub:
             if client is not None:
                 client.bound_sessions = {session_id}
 
+    async def is_session_bound(self, session_id: str) -> bool:
+        """判断是否仍有连接绑定在指定会话上。"""
+        async with self._lock:
+            for client in self._clients.values():
+                if session_id in client.bound_sessions:
+                    return True
+        return False
+
     async def broadcast_to_session(self, session_id: str, payload: dict[str, Any]) -> None:
         """向绑定了指定会话的客户端广播事件。"""
         targets: list[RemoteClient] = []

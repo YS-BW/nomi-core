@@ -200,6 +200,11 @@ utils         = 低层通用小工具
 - `P1`：系统级调度与 `heartbeat`
 - `P1.5`：remote 正式 desktop shell 产品化
 
+另外：
+
+- 所有需要 `nomi-core + nomi-desktop` 共同推进的事项，单独维护在 `PLAN_DESKTOP_COLLAB.md`
+- 本文件只保留 core 主仓自己的总路线，不再混写具体 desktop 协同执行清单
+
 当前进展补充：
 
 - remote 服务端 bridge 已完成
@@ -213,6 +218,11 @@ utils         = 低层通用小工具
 - 当前已完成一轮真实模型探测：
   - 以当前 `mimo-v2.5` 配置直接 `curl` OpenAI 兼容接口，测试了任务工具新增参数后的 tool-call 输出
   - `delivery_audience: "owner"` 与 `delivery_policy: { mode: "all", excluded_surfaces: [...] }` 两组字段都能被稳定产出
+- 当前已完成一轮 remote session 管理协议与 core 收口：
+  - `nomi-protocol` 已新增 `create_session / delete_session / session_created / session_deleted`
+  - `list_sessions` 已扩成全 remote 视图，返回分页字段和完整 session 摘要
+  - `load_history / get_status / send_message / interrupt_turn` 对缺失 session 已统一返回 `session_not_found`
+  - 下一步只剩 desktop 侧会话管理 UI 和交互接入
   - 多工具并列时，模型也能稳定选对 `task_create_after / at / daily / every`
   - 当前波动主要只在 `instruction` 措辞压缩，不在新增字段本身
 - 若后续要实现“默认全平台提醒，但允许 AI 排除微信/桌面端”，当前更合适的方向是：

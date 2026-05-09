@@ -91,11 +91,21 @@ def build_turn_completed_event(
     }
 
 
-def build_error_event(message: str, *, session_id: str | None = None) -> dict[str, Any]:
+def build_error_event(
+    message: str,
+    *,
+    session_id: str | None = None,
+    code: str | None = None,
+    command: str | None = None,
+) -> dict[str, Any]:
     """构造错误事件。"""
     payload: dict[str, Any] = {"type": "error", "message": message}
     if session_id is not None:
         payload["session_id"] = session_id
+    if code is not None:
+        payload["code"] = code
+    if command is not None:
+        payload["command"] = command
     return payload
 
 
@@ -141,9 +151,43 @@ def build_history_snapshot_event(
     }
 
 
-def build_session_list_event(*, sessions: list[dict[str, Any]]) -> dict[str, Any]:
+def build_session_list_event(
+    *,
+    sessions: list[dict[str, Any]],
+    next_page_token: str | None,
+    total_count: int | None,
+) -> dict[str, Any]:
     """构造会话列表事件。"""
-    return {"type": "session_list", "sessions": sessions}
+    return {
+        "type": "session_list",
+        "sessions": sessions,
+        "next_page_token": next_page_token,
+        "total_count": total_count,
+    }
+
+
+def build_session_created_event(
+    *,
+    session_id: str,
+    title: str | None,
+    created_at_ms: int | None,
+) -> dict[str, Any]:
+    """构造会话创建结果事件。"""
+    return {
+        "type": "session_created",
+        "session_id": session_id,
+        "title": title,
+        "created_at_ms": created_at_ms,
+    }
+
+
+def build_session_deleted_event(*, session_id: str, deleted: bool) -> dict[str, Any]:
+    """构造会话删除结果事件。"""
+    return {
+        "type": "session_deleted",
+        "session_id": session_id,
+        "deleted": deleted,
+    }
 
 
 def build_sidebar_snapshot_event(

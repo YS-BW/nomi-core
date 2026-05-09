@@ -14,7 +14,7 @@ from loguru import logger
 
 from nomi.config.schema import Config
 from nomi.remote.bridge import RemoteBridge
-from nomi.remote.hub import RemoteHub, RemoteClient
+from nomi.remote.hub import RemoteClient, RemoteHub
 from nomi.remote.schemas import RemoteCommand
 from nomi.runtime import NomiRuntime
 from nomi.runtime.protocol import (
@@ -24,10 +24,18 @@ from nomi.runtime.protocol import (
     build_ready_event,
     build_resource_action_result_event,
     build_session_bound_event,
+    build_session_created_event,
+    build_session_deleted_event,
     build_session_list_event,
     build_sidebar_snapshot_event,
     build_status_result_event,
     build_turn_started_event,
+)
+from nomi.session.errors import (
+    DuplicateSessionIdError,
+    InvalidPageTokenError,
+    SessionDeleteForbiddenError,
+    SessionNotFoundError,
 )
 
 
@@ -177,7 +185,13 @@ class RemoteServer:
             payload = json.loads(raw)
             command = RemoteCommand.model_validate(payload)
         except Exception as exc:
-            await client.send_json(build_error_event(f"invalid command: {exc}"))
+            await client.send_json(
+                build_error_event(
+                    f"invalid command: {exc}",
+                    code="invalid_command",
+                    command="invalid",
+                )
+            )
             return
 
         try:
@@ -210,8 +224,45 @@ class RemoteServer:
                 await client.send_json(build_status_result_event(snapshot, session_id=session_id))
                 return
             if command.type == "list_sessions":
+                result = self._runtime.list_sessions(
+                    page_token=command.page_token,
+                    page_size=command.page_size,
+                    include_archived=command.include_archived,
+                )
                 await client.send_json(
-                    build_session_list_event(sessions=self._runtime.list_sessions())
+                    build_session_list_event(
+                        sessions=result["sessions"],
+                        next_page_token=result["next_page_token"],
+                        total_count=result["total_count"],
+                    )
+                )
+                return
+            if command.type == "create_session":
+                session = self._runtime.create_session(
+                    session_id=command.session_id,
+                    title=command.title,
+                )
+                await client.send_json(
+                    build_session_created_event(
+                        session_id=session["session_id"],
+                        title=session.get("title"),
+                        created_at_ms=session.get("created_at_ms"),
+                    )
+                )
+                return
+            if command.type == "delete_session":
+                session_id = self._require_session_id(command)
+                if await self._hub.is_session_bound(session_id):
+                    raise SessionDeleteForbiddenError(
+                        "session is currently bound",
+                        session_id=session_id,
+                    )
+                result = self._runtime.delete_session(session_id)
+                await client.send_json(
+                    build_session_deleted_event(
+                        session_id=result["session_id"],
+                        deleted=bool(result["deleted"]),
+                    )
                 )
                 return
             if command.type == "load_history":
@@ -456,11 +507,22 @@ class RemoteServer:
                 )
                 return
             raise ValueError(f"unsupported command: {command.type}")
+        except (SessionNotFoundError, DuplicateSessionIdError, InvalidPageTokenError, SessionDeleteForbiddenError) as exc:
+            await client.send_json(
+                build_error_event(
+                    str(exc),
+                    session_id=getattr(exc, "session_id", None),
+                    code=getattr(exc, "code", "session_error"),
+                    command=command.type,
+                )
+            )
         except Exception as exc:
             await client.send_json(
                 build_error_event(
                     str(exc),
                     session_id=command.session_id,
+                    code="runtime_error",
+                    command=command.type,
                 )
             )
 

@@ -127,6 +127,8 @@ Authorization: Bearer <remote.auth_token>
   - `interrupt_turn`
   - `get_status`
   - `list_sessions`
+  - `create_session`
+  - `delete_session`
   - `load_history`
   - `get_sidebar`
 - 任务管理：
@@ -170,10 +172,49 @@ Authorization: Bearer <remote.auth_token>
 - `status_result`
 - `history_snapshot`
 - `session_list`
+- `session_created`
+- `session_deleted`
 - `task_delivered`
 - `sidebar_snapshot`
 - `resource_action_result`
 - `error`
+
+---
+
+## Session 管理语义
+
+当前 remote 会话管理已经补成显式 CRUD：
+
+- `list_sessions`
+  - 视图范围是当前 remote workspace 下全部已持久化 session，不限当前 client
+  - 返回 `sessions + next_page_token + total_count`
+  - 排序固定为 `updated_at_ms desc`，同时间戳再按 `session_id asc`
+  - 支持 `page_token / page_size / include_archived`
+- `create_session`
+  - 允许客户端传 `session_id`
+  - 不传时由 core 生成 `remote:<uuid>`
+  - 成功后返回 `session_created`
+  - 新会话创建后可立即 `bind_session + load_history + send_message`
+- `delete_session`
+  - 成功后返回 `session_deleted`
+  - 如果仍有 remote client 绑定在该 session 上，返回 `error.code = session_delete_forbidden`
+- 缺失会话错误
+  - `load_history / get_status / send_message / interrupt_turn` 对不存在或已删除 session 都返回 `error.code = session_not_found`
+  - `load_history` 不再隐式创建空 session
+- `error`
+  - 现在会额外带上 `code` 和 `command`
+  - 当前新增的业务错误码至少包括：
+    - `session_not_found`
+    - `session_delete_forbidden`
+    - `invalid_page_token`
+    - `duplicate_session_id`
+
+当前实现入口：
+
+- Session manager：[nomi/session/manager.py](../nomi/session/manager.py#L109-L331)
+- Runtime remote facade：[nomi/runtime/app.py](../nomi/runtime/app.py#L305-L439)
+- Remote server command dispatch：[nomi/remote/server.py](../nomi/remote/server.py#L182-L284)
+- Remote event builder：[nomi/runtime/protocol.py](../nomi/runtime/protocol.py#L94-L190)
 
 ---
 
@@ -213,7 +254,7 @@ http://127.0.0.1:8080
 
 - remote 继续作为服务端 bridge
 - 协议 owner 继续是独立 `nomi-protocol` 仓
-- desktop 通过 `bind_session / send_message / load_history / get_sidebar` 接入
+- desktop 通过 `list_sessions / create_session / delete_session / bind_session / load_history / send_message / get_sidebar` 接入
 - skill zip 上传仍由 `POST /skills/upload` 提供
 
 ---

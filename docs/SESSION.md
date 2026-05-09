@@ -133,6 +133,29 @@ Session 是 Nomi 当前“短期对话上下文”的持久化层 💬
 
 ---
 
+## Remote 会话管理
+
+当前 core 已经把 remote 的会话语义收口成显式管理：
+
+- `SessionManager.create_session()` 会立刻写入一份空 session 文件
+- `SessionManager.delete_session()` 会同时移除磁盘文件和内存缓存
+- `SessionManager.list_sessions()` 现在会返回 remote 可直接消费的摘要字段：
+  - `session_id`
+  - `title`
+  - `created_at_ms`
+  - `updated_at_ms`
+  - `message_count`
+  - `archived`
+  - `source`
+- remote facade 在读取历史、取状态、发送消息、中断前会先检查 session 是否存在；不存在就直接报 `session_not_found`，不会再隐式创建空会话
+
+相关代码：
+
+- Session manager：[nomi/session/manager.py](../nomi/session/manager.py#L109-L331)
+- Remote facade：[nomi/runtime/app.py](../nomi/runtime/app.py#L305-L439)
+
+---
+
 ## 当前边界
 
 session 层当前只管：

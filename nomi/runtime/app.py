@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import json
 import shutil
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
@@ -27,6 +29,7 @@ from nomi.runtime.models import (
     RuntimeStatusSnapshot,
 )
 from nomi.runtime.state import RuntimeState
+from nomi.session.errors import InvalidPageTokenError, SessionNotFoundError
 from nomi.session.manager import Session
 
 if TYPE_CHECKING:
@@ -142,6 +145,7 @@ class NomiRuntime:
         返回:
             当前中断请求的处理结果。
         """
+        self._require_existing_session(session_id)
         return self.agent_loop.interrupt_session(session_id, reason)
 
     def reset_session(self, session_id: str) -> None:
@@ -168,6 +172,7 @@ class NomiRuntime:
         返回:
             对外可复用的 runtime 状态快照。
         """
+        self._require_existing_session(session_id)
         snapshot = await self.agent_loop.build_status_snapshot(session_id)
         return RuntimeStatusSnapshot(
             version=snapshot.version,
@@ -316,6 +321,7 @@ class NomiRuntime:
         返回:
             无返回值。
         """
+        self._require_existing_session(session_id)
         channel, chat_id = self._split_session_id(session_id)
         inbound_metadata = dict(metadata or {})
         inbound_metadata["_session_id"] = session_id
@@ -331,9 +337,68 @@ class NomiRuntime:
             )
         )
 
-    def list_sessions(self) -> list[dict]:
-        """列出当前已持久化会话。"""
-        return self.agent_loop.sessions.list_sessions()
+    def list_sessions(
+        self,
+        *,
+        page_token: str | None = None,
+        page_size: int | None = None,
+        include_archived: bool | None = None,
+    ) -> dict:
+        """按 remote 视图列出当前已持久化会话。"""
+        sessions = self.agent_loop.sessions.list_sessions()
+        if not include_archived:
+            sessions = [item for item in sessions if not bool(item.get("archived"))]
+        sessions = sorted(
+            sessions,
+            key=lambda item: (
+                -(int(item.get("updated_at_ms") or 0)),
+                str(item.get("session_id") or item.get("key") or ""),
+            ),
+        )
+
+        cursor = self._decode_session_page_token(page_token)
+        start_index = 0
+        if cursor is not None:
+            start_index = len(sessions)
+            for index, item in enumerate(sessions):
+                if self._is_session_after_cursor(item, cursor):
+                    start_index = index
+                    break
+
+        page_items = sessions[start_index:]
+        if page_size is not None and page_size > 0:
+            page_items = page_items[:page_size]
+
+        next_page_token: str | None = None
+        if page_items:
+            last_item = page_items[-1]
+            last_index = start_index + len(page_items)
+            if last_index < len(sessions):
+                next_page_token = self._encode_session_page_token(
+                    updated_at_ms=int(last_item.get("updated_at_ms") or 0),
+                    session_id=str(last_item.get("session_id") or last_item.get("key") or ""),
+                )
+
+        return {
+            "sessions": page_items,
+            "next_page_token": next_page_token,
+            "total_count": len(sessions),
+        }
+
+    def create_session(
+        self,
+        session_id: str | None = None,
+        *,
+        title: str | None = None,
+    ) -> dict:
+        """创建一条新的远程会话。"""
+        session = self.agent_loop.sessions.create_session(session_id, title=title, source="remote")
+        return self._serialize_session_summary(session)
+
+    def delete_session(self, session_id: str) -> dict:
+        """删除一条远程会话。"""
+        deleted = self.agent_loop.sessions.delete_session(session_id)
+        return {"session_id": session_id, "deleted": deleted}
 
     def load_session_messages(
         self,
@@ -352,7 +417,7 @@ class NomiRuntime:
         返回:
             包含消息切片和下一游标的字典。
         """
-        session = self.agent_loop.sessions.get_or_create(session_id)
+        session = self._require_existing_session(session_id)
         normalized = self._normalize_session_messages_for_history(session)
         total = len(normalized)
         end = total if cursor is None else max(0, min(cursor, total))
@@ -366,6 +431,13 @@ class NomiRuntime:
             "next_cursor": next_cursor,
             "total_messages": total,
         }
+
+    def _require_existing_session(self, session_id: str) -> Session:
+        """读取一条已存在会话，不存在时抛结构化错误。"""
+        session = self.agent_loop.sessions.get(session_id)
+        if session is None:
+            raise SessionNotFoundError("session not found", session_id=session_id)
+        return session
 
     def get_sidebar_snapshot(self) -> dict:
         """返回远端资源侧栏快照。"""
@@ -626,6 +698,67 @@ class NomiRuntime:
             无返回值。
         """
         await self.lifecycle.close()
+
+    @staticmethod
+    def _serialize_session_summary(session: Session) -> dict:
+        """把 session 转成对外可见的摘要。"""
+        metadata = dict(session.metadata or {})
+        title = metadata.get("title")
+        if not isinstance(title, str) or not title.strip():
+            title = None
+        archived = bool(metadata.get("archived", False))
+        return {
+            "key": session.key,
+            "session_id": session.key,
+            "title": title,
+            "created_at": session.created_at.isoformat(),
+            "updated_at": session.updated_at.isoformat(),
+            "created_at_ms": int(session.created_at.timestamp() * 1000),
+            "updated_at_ms": int(session.updated_at.timestamp() * 1000),
+            "message_count": len(session.messages),
+            "archived": archived,
+            "source": str(metadata.get("source") or "remote"),
+        }
+
+    @staticmethod
+    def _encode_session_page_token(*, updated_at_ms: int, session_id: str) -> str:
+        """把分页游标编码成可传输字符串。"""
+        payload = {"updated_at_ms": updated_at_ms, "session_id": session_id}
+        data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+
+    @staticmethod
+    def _decode_session_page_token(page_token: str | None) -> dict[str, object] | None:
+        """解析分页游标。"""
+        if page_token is None or not str(page_token).strip():
+            return None
+        raw = str(page_token).strip()
+        padding = "=" * (-len(raw) % 4)
+        try:
+            decoded = base64.urlsafe_b64decode((raw + padding).encode("ascii"))
+            payload = json.loads(decoded.decode("utf-8"))
+        except Exception as exc:
+            raise InvalidPageTokenError("invalid page token") from exc
+        if not isinstance(payload, dict):
+            raise InvalidPageTokenError("invalid page token")
+        updated_at_ms = payload.get("updated_at_ms")
+        session_id = payload.get("session_id")
+        if not isinstance(updated_at_ms, int) or not isinstance(session_id, str) or not session_id:
+            raise InvalidPageTokenError("invalid page token")
+        return {"updated_at_ms": updated_at_ms, "session_id": session_id}
+
+    @staticmethod
+    def _is_session_after_cursor(item: dict, cursor: dict[str, object]) -> bool:
+        """判断某条会话是否排在游标之后。"""
+        item_updated_at_ms = int(item.get("updated_at_ms") or 0)
+        cursor_updated_at_ms = int(cursor.get("updated_at_ms") or 0)
+        item_session_id = str(item.get("session_id") or item.get("key") or "")
+        cursor_session_id = str(cursor.get("session_id") or "")
+        if item_updated_at_ms < cursor_updated_at_ms:
+            return True
+        if item_updated_at_ms > cursor_updated_at_ms:
+            return False
+        return item_session_id > cursor_session_id
 
     @staticmethod
     def _split_session_id(session_id: str) -> tuple[str, str]:

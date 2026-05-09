@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 
 import pytest
 from websockets.asyncio.client import connect
@@ -12,6 +13,11 @@ from nomi.bus.queue import MessageBus
 from nomi.config.schema import Config
 from nomi.remote.server import RemoteServer
 from nomi.runtime.models import InterruptResult, RuntimeStatusSnapshot
+from nomi.session.errors import (
+    DuplicateSessionIdError,
+    InvalidPageTokenError,
+    SessionNotFoundError,
+)
 
 
 class _FakeRuntime:
@@ -19,6 +25,19 @@ class _FakeRuntime:
         self.bus = MessageBus()
         self.sent_messages: list[tuple[str, str, str, dict | None]] = []
         self.interrupt_calls: list[str] = []
+        now_ms = int(datetime.now().timestamp() * 1000)
+        self.sessions: dict[str, dict] = {
+            "desktop:test": {
+                "key": "desktop:test",
+                "session_id": "desktop:test",
+                "title": "Test",
+                "created_at_ms": now_ms,
+                "updated_at_ms": now_ms,
+                "message_count": 1,
+                "archived": False,
+                "source": "desktop",
+            }
+        }
         self.sidebar = {
             "tasks": [],
             "skills": [],
@@ -38,9 +57,15 @@ class _FakeRuntime:
         client_id: str,
         metadata: dict | None = None,
     ) -> None:
+        if session_id not in self.sessions:
+            raise SessionNotFoundError("session not found", session_id=session_id)
         self.sent_messages.append((session_id, content, client_id, metadata))
+        self.sessions[session_id]["updated_at_ms"] = int(datetime.now().timestamp() * 1000)
+        self.sessions[session_id]["message_count"] = int(self.sessions[session_id]["message_count"]) + 1
 
     def interrupt_session(self, session_id: str, reason: str = "user_interrupt"):
+        if session_id not in self.sessions:
+            raise SessionNotFoundError("session not found", session_id=session_id)
         self.interrupt_calls.append(session_id)
         return InterruptResult(
             session_id=session_id,
@@ -51,6 +76,8 @@ class _FakeRuntime:
         )
 
     async def get_status_snapshot(self, session_id: str):
+        if session_id not in self.sessions:
+            raise SessionNotFoundError("session not found", session_id=session_id)
         return RuntimeStatusSnapshot(
             version="0.1.5",
             model="mimo-v2.5",
@@ -62,10 +89,56 @@ class _FakeRuntime:
             search_usage_text=None,
         )
 
-    def list_sessions(self) -> list[dict]:
-        return [{"key": "desktop:test", "updated_at": "2026-05-06T12:00:00"}]
+    def list_sessions(
+        self,
+        *,
+        page_token: str | None = None,
+        page_size: int | None = None,
+        include_archived: bool | None = None,
+    ) -> dict:
+        if page_token == "bad-token":
+            raise InvalidPageTokenError("invalid page token")
+        sessions = sorted(
+            self.sessions.values(),
+            key=lambda item: (-int(item["updated_at_ms"]), str(item["session_id"])),
+        )
+        if not include_archived:
+            sessions = [item for item in sessions if not item.get("archived")]
+        if page_size is not None and page_size > 0:
+            sessions = sessions[:page_size]
+        return {
+            "sessions": sessions,
+            "next_page_token": None,
+            "total_count": len(self.sessions),
+        }
+
+    def create_session(self, session_id: str | None = None, *, title: str | None = None) -> dict:
+        normalized = str(session_id or "").strip() or "remote:created"
+        if normalized in self.sessions:
+            raise DuplicateSessionIdError("duplicate session id", session_id=normalized)
+        now_ms = int(datetime.now().timestamp() * 1000)
+        payload = {
+            "key": normalized,
+            "session_id": normalized,
+            "title": title,
+            "created_at_ms": now_ms,
+            "updated_at_ms": now_ms,
+            "message_count": 0,
+            "archived": False,
+            "source": "remote",
+        }
+        self.sessions[normalized] = payload
+        return payload
+
+    def delete_session(self, session_id: str) -> dict:
+        if session_id not in self.sessions:
+            raise SessionNotFoundError("session not found", session_id=session_id)
+        self.sessions.pop(session_id, None)
+        return {"session_id": session_id, "deleted": True}
 
     def load_session_messages(self, session_id: str, *, limit: int = 100, cursor: int | None = None) -> dict:
+        if session_id not in self.sessions:
+            raise SessionNotFoundError("session not found", session_id=session_id)
         return {
             "session_id": session_id,
             "messages": [{"role": "user", "content": "hello"}],
@@ -256,7 +329,40 @@ async def test_remote_server_websocket_protocol() -> None:
             await websocket.send(json.dumps({"type": "list_sessions"}))
             session_list = json.loads(await websocket.recv())
             assert session_list["type"] == "session_list"
-            assert session_list["sessions"][0]["key"] == "desktop:test"
+            assert session_list["sessions"][0]["session_id"] == "desktop:test"
+            assert session_list["total_count"] == 1
+            assert session_list["next_page_token"] is None
+
+            await websocket.send(
+                json.dumps(
+                    {
+                        "type": "create_session",
+                        "session_id": "desktop:new",
+                        "title": "New session",
+                    }
+                )
+            )
+            created = json.loads(await websocket.recv())
+            assert created["type"] == "session_created"
+            assert created["session_id"] == "desktop:new"
+            assert created["title"] == "New session"
+            assert created["created_at_ms"] is not None
+
+            await websocket.send(json.dumps({"type": "delete_session", "session_id": "desktop:new"}))
+            deleted = json.loads(await websocket.recv())
+            assert deleted == {
+                "type": "session_deleted",
+                "session_id": "desktop:new",
+                "deleted": True,
+            }
+
+            await websocket.send(
+                json.dumps({"type": "load_history", "session_id": "desktop:new", "limit": 10})
+            )
+            deleted_error = json.loads(await websocket.recv())
+            assert deleted_error["type"] == "error"
+            assert deleted_error["code"] == "session_not_found"
+            assert deleted_error["command"] == "load_history"
 
             await websocket.send(
                 json.dumps({"type": "load_history", "session_id": "desktop:test", "limit": 10})
@@ -345,6 +451,60 @@ async def test_remote_server_rebinds_to_single_current_session() -> None:
             assert current["type"] == "message"
             assert current["session_id"] == "desktop:two"
             assert current["content"] == "当前会话消息"
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_remote_server_session_management_errors() -> None:
+    config = Config()
+    config.remote.enabled = True
+    config.remote.host = "127.0.0.1"
+    config.remote.port = 8875
+    config.remote.auth_token = "secret-token"
+    runtime = _FakeRuntime()
+    server = RemoteServer(config, runtime)  # type: ignore[arg-type]
+
+    await server.start()
+    try:
+        async with connect(
+            "ws://127.0.0.1:8875/ws",
+            additional_headers={"Authorization": "Bearer secret-token"},
+        ) as websocket:
+            await websocket.recv()
+
+            await websocket.send(json.dumps({"type": "list_sessions", "page_token": "bad-token"}))
+            error = json.loads(await websocket.recv())
+            assert error["type"] == "error"
+            assert error["code"] == "invalid_page_token"
+            assert error["command"] == "list_sessions"
+
+            await websocket.send(
+                json.dumps({"type": "load_history", "session_id": "desktop:missing", "limit": 10})
+            )
+            error = json.loads(await websocket.recv())
+            assert error["code"] == "session_not_found"
+            assert error["command"] == "load_history"
+
+            await websocket.send(
+                json.dumps(
+                    {
+                        "type": "create_session",
+                        "session_id": "desktop:test",
+                        "title": "dup",
+                    }
+                )
+            )
+            error = json.loads(await websocket.recv())
+            assert error["code"] == "duplicate_session_id"
+            assert error["command"] == "create_session"
+
+            await websocket.send(json.dumps({"type": "bind_session", "session_id": "desktop:test"}))
+            await websocket.recv()
+            await websocket.send(json.dumps({"type": "delete_session", "session_id": "desktop:test"}))
+            error = json.loads(await websocket.recv())
+            assert error["code"] == "session_delete_forbidden"
+            assert error["command"] == "delete_session"
     finally:
         await server.stop()
 

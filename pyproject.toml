@@ -18,7 +18,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "nomi-protocol @ git+https://github.com/YS-BW/nomi-protocol.git@v0.1.0",
+    "nomi-protocol @ git+https://github.com/YS-BW/nomi-protocol.git@v0.2.0",
     "typer>=0.20.0,<1.0.0",
     "anthropic>=0.45.0,<1.0.0",
     "pydantic>=2.12.0,<3.0.0",
