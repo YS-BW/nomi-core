@@ -36,6 +36,10 @@ Nomi 当前阶段的目标不变：
 - 最小工具调用闭环
 - DeepSeek 独立 provider backend
 - DeepSeek tool-call transcript 的 `reasoning_content` 协议修复
+- Qwen 独立 provider adapter
+- Zhipu 独立 provider adapter
+- Moonshot / Kimi 独立 provider adapter
+- SiliconFlow 独立 provider adapter
 - 单 runtime、单会话下的真实 interrupt
 - `serve stdio` 第二入口
 - `channels/` 适配层与 `weixin` 内置 channel
@@ -172,6 +176,17 @@ utils         = 低层通用小工具
 - DeepSeek 默认官方地址固定为 `https://api.deepseek.com`
 - DeepSeek 现在有独立 `deepseek` provider，不再要求用户通过 `custom + apiBase` 伪装接入
 - `deepseek-reasoner` 当前固定不走工具调用链路，带 tools 时直接返回明确错误
+- Qwen 当前通过 `qwen` provider 接入 `https://dashscope.aliyuncs.com/compatible-mode/v1`
+- Qwen 的 thinking 参数当前固定收口在 provider 层，包含 `enable_thinking / preserve_thinking`
+- Qwen 在强制 `tool_choice` 时当前固定自动关闭 thinking
+- Zhipu 当前通过 `zhipu` provider 接入 `https://open.bigmodel.cn/api/paas/v4`
+- Zhipu 的 thinking 参数当前固定收口在 provider 层，包含 `extra_body.thinking / clear_thinking`
+- Zhipu 在强制 `tool_choice` 时当前固定自动降级为 `auto`
+- Moonshot 当前通过 `moonshot` provider 接入 `https://api.moonshot.cn/v1`
+- Moonshot / Kimi 的 thinking 参数当前固定收口在 provider 层，包含 `extra_body.thinking / thinking.keep`
+- Moonshot / Kimi 在强制 `tool_choice` 时当前固定自动降级为 `auto`
+- SiliconFlow 当前通过 `siliconflow` provider 接入 `https://api.siliconflow.cn/v1`
+- SiliconFlow 的 thinking 参数当前固定收口在 provider 层，包含 `extra_body.enable_thinking / thinking_budget`
 - `Ctrl+C` 仍然退出交互进程
 - `Esc` 现在是当前交互轮次的真实中断键
 - `Esc` 的监听已固定为“孤立按键判定”，不会把终端控制序列残留到下一次输入
@@ -181,6 +196,7 @@ utils         = 低层通用小工具
 - active turn 的 CLI 渲染现在已收口为单写入器；tool hint 不再走 prompt 重绘通道
 - `serve stdio` 复用当前外部事件名：`ready / progress / delta / stream_end / message / error`
 - remote 当前事件面固定为：`ready / session_bound / turn_started / progress / delta / stream_end / message / turn_completed / interrupt_result / status_result / history_snapshot / session_list / task_delivered / sidebar_snapshot / resource_action_result / error`
+- remote 的 `ready` 事件当前额外携带 `provider_catalog`，供 desktop 决定 provider 设置页里的 `apiBase` 只读/可编辑状态
 - 浏览器 demo 当前通过 `ws://.../ws?token=...` 联调 remote；正式客户端仍优先使用 `Authorization: Bearer ...`
 - CLI 根命令当前固定为：`onboard / agent / channel / remote / status`
 - 当前已经有 `nomi channel login weixin`

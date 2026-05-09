@@ -35,6 +35,21 @@ def build_provider(config: Config) -> LLMProvider:
     elif backend == "deepseek":
         if not provider_config or not provider_config.api_key:
             raise ValueError("No API key configured for provider 'deepseek'.")
+    elif backend == "qwen":
+        if not provider_config or not provider_config.api_key:
+            raise ValueError("No API key configured for provider 'qwen'.")
+    elif backend == "zhipu":
+        if not provider_config or not provider_config.api_key:
+            raise ValueError("No API key configured for provider 'zhipu'.")
+    elif backend == "moonshot":
+        if not provider_config or not provider_config.api_key:
+            raise ValueError("No API key configured for provider 'moonshot'.")
+    elif backend == "siliconflow":
+        if not provider_config or not provider_config.api_key:
+            raise ValueError("No API key configured for provider 'siliconflow'.")
+    elif provider_name == "minimax":
+        if not provider_config or not provider_config.api_key:
+            raise ValueError("No API key configured for provider 'minimax'.")
     elif backend == "openai_compat" and not model.startswith("bedrock/"):
         needs_key = not (provider_config and provider_config.api_key)
         exempt = spec and (spec.is_local or spec.is_direct)
@@ -72,6 +87,46 @@ def build_provider(config: Config) -> LLMProvider:
         from nomi.providers.backends.deepseek import DeepSeekProvider
 
         provider = DeepSeekProvider(
+            api_key=provider_config.api_key if provider_config else None,
+            api_base=resolution.api_base,
+            default_model=model,
+            extra_headers=provider_config.extra_headers if provider_config else None,
+            spec=spec,
+        )
+    elif backend == "qwen":
+        from nomi.providers.backends.qwen import QwenProvider
+
+        provider = QwenProvider(
+            api_key=provider_config.api_key if provider_config else None,
+            api_base=resolution.api_base,
+            default_model=model,
+            extra_headers=provider_config.extra_headers if provider_config else None,
+            spec=spec,
+        )
+    elif backend == "zhipu":
+        from nomi.providers.backends.zhipu import ZhipuProvider
+
+        provider = ZhipuProvider(
+            api_key=provider_config.api_key if provider_config else None,
+            api_base=resolution.api_base,
+            default_model=model,
+            extra_headers=provider_config.extra_headers if provider_config else None,
+            spec=spec,
+        )
+    elif backend == "moonshot":
+        from nomi.providers.backends.moonshot import MoonshotProvider
+
+        provider = MoonshotProvider(
+            api_key=provider_config.api_key if provider_config else None,
+            api_base=resolution.api_base,
+            default_model=model,
+            extra_headers=provider_config.extra_headers if provider_config else None,
+            spec=spec,
+        )
+    elif backend == "siliconflow":
+        from nomi.providers.backends.siliconflow import SiliconFlowProvider
+
+        provider = SiliconFlowProvider(
             api_key=provider_config.api_key if provider_config else None,
             api_base=resolution.api_base,
             default_model=model,

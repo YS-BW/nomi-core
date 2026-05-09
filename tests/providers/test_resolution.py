@@ -151,6 +151,131 @@ def test_resolution_uses_forced_deepseek_provider_and_default_base() -> None:
     assert resolution.api_base == "https://api.deepseek.com"
 
 
+def test_resolution_uses_forced_qwen_provider_and_default_base() -> None:
+    """显式配置 Qwen 时应落到 qwen backend 并补默认 api_base。"""
+    config = Config.model_validate(
+        {
+            "providers": {
+                "qwen": {
+                    "apiKey": "dashscope-test-key",
+                }
+            },
+            "agents": {
+                "defaults": {
+                    "provider": "qwen",
+                    "model": "qwen-max",
+                }
+            },
+        }
+    )
+
+    resolution = resolve_provider(config)
+
+    assert resolution.provider_name == "qwen"
+    assert resolution.backend == "qwen"
+    assert resolution.api_base == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+
+def test_resolution_uses_forced_zhipu_provider_and_default_base() -> None:
+    """显式配置 Zhipu 时应落到 zhipu backend 并补默认 api_base。"""
+    config = Config.model_validate(
+        {
+            "providers": {
+                "zhipu": {
+                    "apiKey": "zhipu-test-key",
+                }
+            },
+            "agents": {
+                "defaults": {
+                    "provider": "zhipu",
+                    "model": "glm-4.5",
+                }
+            },
+        }
+    )
+
+    resolution = resolve_provider(config)
+
+    assert resolution.provider_name == "zhipu"
+    assert resolution.backend == "zhipu"
+    assert resolution.api_base == "https://open.bigmodel.cn/api/paas/v4"
+
+
+def test_resolution_uses_forced_minimax_provider_and_default_base() -> None:
+    """显式配置 MiniMax 时应落到 Anthropic backend 并补默认 api_base。"""
+    config = Config.model_validate(
+        {
+            "providers": {
+                "minimax": {
+                    "apiKey": "minimax-test-key",
+                }
+            },
+            "agents": {
+                "defaults": {
+                    "provider": "minimax",
+                    "model": "MiniMax-M2.7",
+                }
+            },
+        }
+    )
+
+    resolution = resolve_provider(config)
+
+    assert resolution.provider_name == "minimax"
+    assert resolution.backend == "anthropic"
+    assert resolution.api_base == "https://api.minimaxi.com/anthropic"
+
+
+def test_resolution_uses_forced_moonshot_provider_and_default_base() -> None:
+    """显式配置 Moonshot 时应落到专用 backend 并补默认 api_base。"""
+    config = Config.model_validate(
+        {
+            "providers": {
+                "moonshot": {
+                    "apiKey": "moonshot-test-key",
+                }
+            },
+            "agents": {
+                "defaults": {
+                    "provider": "moonshot",
+                    "model": "kimi-k2.6",
+                }
+            },
+        }
+    )
+
+    resolution = resolve_provider(config)
+
+    assert resolution.provider_name == "moonshot"
+    assert resolution.backend == "moonshot"
+    assert resolution.api_base == "https://api.moonshot.cn/v1"
+
+
+def test_resolution_uses_forced_siliconflow_provider_and_default_base() -> None:
+    """显式配置 SiliconFlow 时应落到专用 backend 并补默认 api_base。"""
+    config = Config.model_validate(
+        {
+            "providers": {
+                "siliconflow": {
+                    "apiKey": "siliconflow-test-key",
+                }
+            },
+            "agents": {
+                "defaults": {
+                    "provider": "siliconflow",
+                    "model": "Pro/zai-org/GLM-4.7",
+                }
+            },
+        }
+    )
+
+    resolution = resolve_provider(config)
+
+    assert resolution.provider_name == "siliconflow"
+    assert resolution.backend == "siliconflow"
+    assert resolution.api_base == "https://api.siliconflow.cn/v1"
+
+
 def test_resolution_rejects_unknown_forced_provider() -> None:
     """未知强制 provider 应立即报错。"""
     config = Config()

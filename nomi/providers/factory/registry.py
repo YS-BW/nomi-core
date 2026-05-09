@@ -24,7 +24,7 @@ class ProviderSpec:
     display_name: str = ""  # 在 `nomi status` 中展示的名称。
 
     # 选择哪种提供方实现
-    # 可选值包括 "openai_compat"、"anthropic"、"azure_openai"
+    # 可选值包括 "openai_compat"、"anthropic"、"azure_openai"、"deepseek"、"mimo"、"qwen"、"zhipu"、"moonshot"、"siliconflow"
     backend: str = "openai_compat"
 
     # 需要额外注入的环境变量，例如 (("ZHIPUAI_API_KEY", "{api_key}"),)
@@ -82,6 +82,27 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="deepseek",
         default_api_base="https://api.deepseek.com",
     ),
+    # Qwen v1 继续走 OpenAI Chat Completions 兼容面，但需要独立处理 thinking 参数。
+    ProviderSpec(
+        name="qwen",
+        keywords=("qwen",),
+        env_key="DASHSCOPE_API_KEY",
+        display_name="Qwen",
+        backend="qwen",
+        detect_by_base_keyword="dashscope",
+        default_api_base="https://dashscope.aliyuncs.com/compatible-mode/v1",
+    ),
+    # MiniMax v1 优先复用 Anthropic 兼容接口，便于承接其 interleaved thinking / tool_use 语义。
+    ProviderSpec(
+        name="minimax",
+        keywords=("minimax",),
+        env_key="MINIMAX_API_KEY",
+        display_name="MiniMax",
+        backend="anthropic",
+        detect_by_base_keyword="minimaxi",
+        default_api_base="https://api.minimaxi.com/anthropic",
+        supports_prompt_caching=True,
+    ),
     # MiMo 独立 backend，虽然接口兼容 OpenAI，但请求/流式/工具调用策略不同。
     ProviderSpec(
         name="mimo",
@@ -129,13 +150,13 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         default_api_base="https://aihubmix.com/v1",
         strip_model_prefix=True,
     ),
-    # SiliconFlow（硅基流动）是 OpenAI 兼容网关，模型名保留组织前缀。
+    # SiliconFlow（硅基流动）继续走 OpenAI Chat Completions，但需要单独收口 thinking 参数。
     ProviderSpec(
         name="siliconflow",
         keywords=("siliconflow",),
         env_key="OPENAI_API_KEY",
         display_name="SiliconFlow",
-        backend="openai_compat",
+        backend="siliconflow",
         is_gateway=True,
         detect_by_base_keyword="siliconflow",
         default_api_base="https://api.siliconflow.cn/v1",
@@ -208,25 +229,30 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         backend="openai_compat",
         supports_max_completion_tokens=True,
     ),
-    # Zhipu（智谱）提供 OpenAI 兼容接口。
+    # Zhipu（智谱）继续走 OpenAI Chat Completions 兼容面，但需要独立收口 thinking 参数。
     ProviderSpec(
         name="zhipu",
         keywords=("zhipu", "glm", "zai"),
         env_key="ZAI_API_KEY",
         display_name="Zhipu AI",
-        backend="openai_compat",
+        backend="zhipu",
         env_extras=(("ZHIPUAI_API_KEY", "{api_key}"),),
         default_api_base="https://open.bigmodel.cn/api/paas/v4",
     ),
-    # Moonshot（月之暗面）承载 Kimi 模型，K2.5 要求 temperature 不低于 1.0。
+    # Moonshot（月之暗面）承载 Kimi 模型，需要单独收口 thinking 与 tool_choice 约束。
     ProviderSpec(
         name="moonshot",
         keywords=("moonshot", "kimi"),
         env_key="MOONSHOT_API_KEY",
         display_name="Moonshot",
-        backend="openai_compat",
-        default_api_base="https://api.moonshot.ai/v1",
-        model_overrides=(("kimi-k2.5", {"temperature": 1.0}),),
+        backend="moonshot",
+        detect_by_base_keyword="moonshot",
+        default_api_base="https://api.moonshot.cn/v1",
+        model_overrides=(
+            ("kimi-k2.6", {"temperature": 1.0}),
+            ("kimi-k2.5", {"temperature": 1.0}),
+            ("kimi-k2-thinking", {"temperature": 1.0}),
+        ),
     ),
     # 本地部署优先靠配置字段识别，而不是 api_base。
     # vLLM 或任意本地 OpenAI 兼容服务。
@@ -275,3 +301,25 @@ def find_by_name(name: str) -> ProviderSpec | None:
         if spec.name == normalized:
             return spec
     return None
+
+
+def build_provider_catalog() -> dict[str, list[dict[str, Any]]]:
+    """构造供远端 UI 消费的 provider 目录元数据。"""
+
+    return {
+        "providers": [
+            {
+                "name": spec.name,
+                "display_name": spec.label,
+                "backend": spec.backend,
+                "default_api_base": spec.default_api_base or None,
+                "api_base_editable": spec.name == "custom",
+                "is_gateway": bool(spec.is_gateway),
+                "is_local": bool(spec.is_local),
+                "is_direct": bool(spec.is_direct),
+                "strip_model_prefix": bool(spec.strip_model_prefix),
+                "supports_prompt_caching": bool(spec.supports_prompt_caching),
+            }
+            for spec in PROVIDERS
+        ]
+    }

@@ -179,6 +179,20 @@ Authorization: Bearer <remote.auth_token>
 - `resource_action_result`
 - `error`
 
+`ready` 当前除了 `host / port` 外，还会额外携带：
+
+- `provider_catalog`
+
+其中每个 provider 条目至少包含：
+
+- `name`
+- `display_name`
+- `backend`
+- `default_api_base`
+- `api_base_editable`
+
+desktop 应使用这份 catalog 决定 provider 设置页里 `apiBase` 的展示和禁用状态，而不是自己硬编码哪些 provider 可改。
+
 ---
 
 ## Session 管理语义

@@ -44,6 +44,94 @@ _STABLE_PROVIDER_MODELS: dict[str, tuple[ModelSpec, ...]] = {
             recommended_context_window_tokens=64_000,
         ),
     ),
+    "qwen": (
+        ModelSpec(
+            provider_name="qwen",
+            name="qwen-max",
+            aliases=("qwen/qwen-max",),
+            recommended_context_window_tokens=131_072,
+        ),
+        ModelSpec(
+            provider_name="qwen",
+            name="qwen-plus",
+            aliases=("qwen/qwen-plus",),
+            recommended_context_window_tokens=131_072,
+        ),
+        ModelSpec(
+            provider_name="qwen",
+            name="qwen-turbo",
+            aliases=("qwen/qwen-turbo",),
+            recommended_context_window_tokens=131_072,
+        ),
+        ModelSpec(
+            provider_name="qwen",
+            name="qwen3-235b-a22b",
+            aliases=("qwen/qwen3-235b-a22b",),
+            recommended_context_window_tokens=131_072,
+        ),
+        ModelSpec(
+            provider_name="qwen",
+            name="qwen3-32b",
+            aliases=("qwen/qwen3-32b",),
+            recommended_context_window_tokens=131_072,
+        ),
+        ModelSpec(
+            provider_name="qwen",
+            name="qwen3-14b",
+            aliases=("qwen/qwen3-14b",),
+            recommended_context_window_tokens=131_072,
+        ),
+        ModelSpec(
+            provider_name="qwen",
+            name="qwen3-8b",
+            aliases=("qwen/qwen3-8b",),
+            recommended_context_window_tokens=131_072,
+        ),
+    ),
+    "minimax": (
+        ModelSpec(
+            provider_name="minimax",
+            name="MiniMax-M2.7",
+            aliases=("minimax/MiniMax-M2.7",),
+            recommended_context_window_tokens=200_000,
+        ),
+        ModelSpec(
+            provider_name="minimax",
+            name="MiniMax-M2.7-highspeed",
+            aliases=("minimax/MiniMax-M2.7-highspeed",),
+            recommended_context_window_tokens=200_000,
+        ),
+        ModelSpec(
+            provider_name="minimax",
+            name="MiniMax-M2.5",
+            aliases=("minimax/MiniMax-M2.5",),
+            recommended_context_window_tokens=200_000,
+        ),
+        ModelSpec(
+            provider_name="minimax",
+            name="MiniMax-M2.5-highspeed",
+            aliases=("minimax/MiniMax-M2.5-highspeed",),
+            recommended_context_window_tokens=200_000,
+        ),
+        ModelSpec(
+            provider_name="minimax",
+            name="MiniMax-M2.1",
+            aliases=("minimax/MiniMax-M2.1",),
+            recommended_context_window_tokens=200_000,
+        ),
+        ModelSpec(
+            provider_name="minimax",
+            name="MiniMax-M2.1-highspeed",
+            aliases=("minimax/MiniMax-M2.1-highspeed",),
+            recommended_context_window_tokens=200_000,
+        ),
+        ModelSpec(
+            provider_name="minimax",
+            name="MiniMax-M2",
+            aliases=("minimax/MiniMax-M2",),
+            recommended_context_window_tokens=200_000,
+        ),
+    ),
     "mimo": (
         ModelSpec(
             provider_name="mimo",
@@ -101,14 +189,58 @@ _STABLE_PROVIDER_MODELS: dict[str, tuple[ModelSpec, ...]] = {
     "moonshot": (
         ModelSpec(
             provider_name="moonshot",
+            name="kimi-k2.6",
+            aliases=("moonshot/kimi-k2.6",),
+            recommended_context_window_tokens=262_144,
+        ),
+        ModelSpec(
+            provider_name="moonshot",
             name="kimi-k2.5",
             aliases=("moonshot/kimi-k2.5",),
             recommended_context_window_tokens=262_144,
         ),
         ModelSpec(
             provider_name="moonshot",
+            name="kimi-k2-thinking",
+            aliases=("moonshot/kimi-k2-thinking",),
+            recommended_context_window_tokens=262_144,
+        ),
+        ModelSpec(
+            provider_name="moonshot",
+            name="kimi-k2-thinking-preview",
+            aliases=("moonshot/kimi-k2-thinking-preview",),
+            recommended_context_window_tokens=262_144,
+        ),
+        ModelSpec(
+            provider_name="moonshot",
             name="kimi-k2-turbo-preview",
             aliases=("moonshot/kimi-k2-turbo-preview",),
+            recommended_context_window_tokens=128_000,
+        ),
+    ),
+    "siliconflow": (
+        ModelSpec(
+            provider_name="siliconflow",
+            name="Pro/deepseek-ai/DeepSeek-V3.2",
+            aliases=("siliconflow/Pro/deepseek-ai/DeepSeek-V3.2",),
+            recommended_context_window_tokens=65_536,
+        ),
+        ModelSpec(
+            provider_name="siliconflow",
+            name="Pro/deepseek-ai/DeepSeek-R1",
+            aliases=("siliconflow/Pro/deepseek-ai/DeepSeek-R1",),
+            recommended_context_window_tokens=65_536,
+        ),
+        ModelSpec(
+            provider_name="siliconflow",
+            name="Pro/Qwen/Qwen3-32B",
+            aliases=("siliconflow/Pro/Qwen/Qwen3-32B",),
+            recommended_context_window_tokens=131_072,
+        ),
+        ModelSpec(
+            provider_name="siliconflow",
+            name="Pro/zai-org/GLM-4.7",
+            aliases=("siliconflow/Pro/zai-org/GLM-4.7",),
             recommended_context_window_tokens=128_000,
         ),
     ),

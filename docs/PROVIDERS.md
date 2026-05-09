@@ -18,6 +18,8 @@ Nomi 的 provider 子系统，简单理解就是“模型接入层” 🤖
 
 - `custom`
 - `deepseek`
+- `qwen`
+- `minimax`
 - `mimo`
 - `azure_openai`
 - `anthropic`
@@ -107,11 +109,20 @@ provider 解析逻辑在：
 
 ## Backend 层
 
-当前 backend 只分三类：
+当前 backend 基座仍然主要是三类：
 
 - `openai_compat`
 - `anthropic`
 - `azure_openai`
+
+但在这三类之上，已经有若干 provider 级轻量 adapter：
+
+- `DeepSeekProvider`
+- `QwenProvider`
+- `ZhipuProvider`
+- `MoonshotProvider`
+- `SiliconFlowProvider`
+- `MiMoProvider`
 
 对应文件：
 
@@ -142,21 +153,23 @@ provider 解析逻辑在：
 - `custom`
 - `openai`
 - `openrouter`
-- `zhipu`
 - `vllm`
 - `ollama`
 - `ovms`
-- `moonshot`
 - `aihubmix`
-- `siliconflow`
 - `volcengine`
 - `volcengine_coding_plan`
 - `byteplus`
 - `byteplus_coding_plan`
 
-真正不是 `openai_compat` 的只有：
+真正不是 generic `openai_compat` 的只有：
 
 - `deepseek`
+- `qwen`
+- `zhipu`
+- `moonshot`
+- `siliconflow`
+- `minimax`
 - `mimo`
 - `anthropic`
 - `azure_openai`
@@ -186,7 +199,6 @@ provider 解析逻辑在：
 
 - `openai`
 - `zhipu`
-- `moonshot`
 
 ### 3. 网关型 provider
 
@@ -258,6 +270,232 @@ DeepSeek 现在不再建议通过 `custom` 伪装接入。
 - `deepseek-v4-*` 在带工具时优先走非流式请求，再把最终文本回灌到 CLI 渲染
 - `deepseek-reasoner` 如果带 tools，会直接返回明确错误，不再把 DeepSeek 的 400 原样漏给用户
 
+## Qwen 正式接入
+
+阿里百炼 Qwen 当前推荐通过独立 `qwen` provider 接入，而不是继续走 `custom` 伪装。
+
+当前代码事实：
+
+- 配置段：`providers.qwen`
+- 默认地址：`https://dashscope.aliyuncs.com/compatible-mode/v1`
+- backend：`QwenProvider`
+
+因此常规配置只需要填 `apiKey`：
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "provider": "qwen",
+      "model": "qwen-max"
+    }
+  },
+  "providers": {
+    "qwen": {
+      "apiKey": "你的 key"
+    }
+  }
+}
+```
+
+如果你填了 `apiBase`，会覆盖默认官方地址；否则直接走官方默认地址。
+
+当前不建议再用 `custom + apiBase` 伪装配置 Qwen。原因不是“不能用”，而是 Qwen 有专门的 thinking 请求参数，需要通过 `QwenProvider` 统一处理：
+
+- `enable_thinking`
+- `preserve_thinking`
+- 强制 `tool_choice` 时自动关闭 thinking
+
+### Qwen 模型建议
+
+当前内置目录优先覆盖：
+
+- `qwen-max`
+- `qwen-plus`
+- `qwen-turbo`
+- `qwen3-235b-a22b`
+- `qwen3-32b`
+- `qwen3-14b`
+- `qwen3-8b`
+
+带工具调用时，v1 推荐优先使用 `qwen-max`。
+
+## Zhipu 正式接入
+
+智谱当前继续走 OpenAI Chat Completions 兼容接口，但不再只是 generic `openai_compat` 配置。
+
+当前代码事实：
+
+- 配置段：`providers.zhipu`
+- 默认地址：`https://open.bigmodel.cn/api/paas/v4`
+- backend：`ZhipuProvider`
+
+因此常规配置仍然只需要填 `apiKey`：
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "provider": "zhipu",
+      "model": "glm-4.5"
+    }
+  },
+  "providers": {
+    "zhipu": {
+      "apiKey": "你的 key"
+    }
+  }
+}
+```
+
+当前不建议再把智谱只当成“普通 OpenAI 兼容端点”理解。原因不是响应结构不同，而是它的 thinking 和工具选择参数需要 provider 层单独收口：
+
+- `extra_body.thinking`
+- preserved thinking 时自动带 `clear_thinking: false`
+- 强制 `tool_choice` 时自动降级成 `auto`
+
+## MiniMax 正式接入
+
+MiniMax 当前推荐通过独立 `minimax` provider 接入，而不是继续走 `custom` 伪装。
+
+当前代码事实：
+
+- 配置段：`providers.minimax`
+- 默认地址：`https://api.minimaxi.com/anthropic`
+- backend：复用 `AnthropicProvider`
+
+因此常规配置只需要填 `apiKey`：
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "provider": "minimax",
+      "model": "MiniMax-M2.7"
+    }
+  },
+  "providers": {
+    "minimax": {
+      "apiKey": "你的 key"
+    }
+  }
+}
+```
+
+如果你填了 `apiBase`，会覆盖默认官方地址；否则直接走官方默认地址。
+
+当前不建议再用 `custom + apiBase` 伪装配置 MiniMax。原因不是“不能用”，而是当前官方推荐的 tool calling / interleaved thinking 路径更接近 Anthropic block 语义，复用现有 `AnthropicProvider` 更稳。
+
+### MiniMax 模型建议
+
+当前内置目录优先覆盖：
+
+- `MiniMax-M2.7`
+- `MiniMax-M2.7-highspeed`
+- `MiniMax-M2.5`
+- `MiniMax-M2.5-highspeed`
+- `MiniMax-M2.1`
+- `MiniMax-M2.1-highspeed`
+- `MiniMax-M2`
+
+带工具调用时，当前推荐优先使用 `MiniMax-M2.7`。
+
+## Moonshot / Kimi 正式接入
+
+Moonshot 当前继续走 OpenAI Chat Completions 兼容接口，但也不再只是 generic `openai_compat` 配置。
+
+当前代码事实：
+
+- 配置段：`providers.moonshot`
+- 默认地址：`https://api.moonshot.cn/v1`
+- backend：`MoonshotProvider`
+
+因此常规配置只需要填 `apiKey`：
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "provider": "moonshot",
+      "model": "kimi-k2.6"
+    }
+  },
+  "providers": {
+    "moonshot": {
+      "apiKey": "你的 key"
+    }
+  }
+}
+```
+
+如果你填了 `apiBase`，会覆盖默认官方地址；否则直接走官方默认地址。
+
+当前不建议再把 Kimi 只当成“普通 OpenAI 兼容端点”理解。原因不是响应结构完全不同，而是它有几条需要 provider 层单独收口的官方约束：
+
+- `kimi-k2.6 / kimi-k2.5` 的 thinking 通过 `extra_body.thinking` 控制
+- 历史里已有 `reasoning_content` 时，当前会补 `thinking.keep = "all"`
+- 强制 `tool_choice` 当前固定自动降级成 `auto`
+- `kimi-k2.6 / kimi-k2.5 / kimi-k2-thinking*` 当前固定补 `temperature = 1.0`
+
+### Moonshot / Kimi 模型建议
+
+当前内置目录优先覆盖：
+
+- `kimi-k2.6`
+- `kimi-k2.5`
+- `kimi-k2-thinking`
+- `kimi-k2-thinking-preview`
+- `kimi-k2-turbo-preview`
+
+带工具调用时，当前推荐优先使用 `kimi-k2.6`。
+
+## SiliconFlow 正式接入
+
+SiliconFlow 当前继续走 OpenAI Chat Completions 兼容接口，但也不再只是 generic `openai_compat` 网关配置。
+
+当前代码事实：
+
+- 配置段：`providers.siliconflow`
+- 默认地址：`https://api.siliconflow.cn/v1`
+- backend：`SiliconFlowProvider`
+
+因此常规配置只需要填 `apiKey`：
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "provider": "siliconflow",
+      "model": "Pro/zai-org/GLM-4.7"
+    }
+  },
+  "providers": {
+    "siliconflow": {
+      "apiKey": "你的 key"
+    }
+  }
+}
+```
+
+如果你填了 `apiBase`，会覆盖默认官方地址；否则直接走官方默认地址。
+
+当前不建议再把 SiliconFlow 只当成“普通 OpenAI 兼容网关”理解。原因不是主响应结构不同，而是它有一组需要 provider 层统一收口的官方 thinking 参数：
+
+- `extra_body.enable_thinking`
+- `extra_body.thinking_budget`
+- reasoning 返回继续复用现有 `reasoning_content` 解析链路
+
+### SiliconFlow 模型建议
+
+当前内置目录优先覆盖：
+
+- `Pro/deepseek-ai/DeepSeek-V3.2`
+- `Pro/deepseek-ai/DeepSeek-R1`
+- `Pro/Qwen/Qwen3-32B`
+- `Pro/zai-org/GLM-4.7`
+
+带工具调用时，当前推荐优先使用 `Pro/zai-org/GLM-4.7`。
+
 ## Mimo 默认配置
 
 当前默认推荐的小米 Mimo 配置方式就是：
@@ -293,10 +531,14 @@ DeepSeek 现在不再建议通过 `custom` 伪装接入。
 
 当前内置条目主要覆盖：
 
+- `qwen` -> `qwen-max` / `qwen-plus` / `qwen3-*`
+- `zhipu` -> 仍以当前用户自配模型为主，provider 层负责请求参数收口
+- `minimax` -> `MiniMax-M2.7` / `MiniMax-M2.5` / `MiniMax-M2.1`
 - `custom` -> `mimo-v2.5`
 - `openai` -> `gpt-5` / `gpt-5-mini` / `gpt-4.1` / `gpt-4.1-mini`
 - `anthropic` -> Claude 4 / Claude 3.7
-- `moonshot` -> `kimi-k2.5` 等
+- `moonshot` -> `kimi-k2.6` / `kimi-k2-thinking` 等
+- `siliconflow` -> `Pro/zai-org/GLM-4.7` / `Pro/deepseek-ai/DeepSeek-V3.2` 等
 
 这个目录现在主要服务：
 

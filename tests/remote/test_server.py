@@ -263,6 +263,12 @@ async def test_remote_server_websocket_protocol() -> None:
         ) as websocket:
             ready = json.loads(await websocket.recv())
             assert ready["type"] == "ready"
+            assert ready["provider_catalog"]["providers"]
+            custom = next(item for item in ready["provider_catalog"]["providers"] if item["name"] == "custom")
+            deepseek = next(item for item in ready["provider_catalog"]["providers"] if item["name"] == "deepseek")
+            assert custom["api_base_editable"] is True
+            assert deepseek["api_base_editable"] is False
+            assert deepseek["default_api_base"] == "https://api.deepseek.com"
 
             await websocket.send(json.dumps({"type": "bind_session", "session_id": "desktop:test"}))
             bound = json.loads(await websocket.recv())

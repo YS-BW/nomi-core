@@ -20,6 +20,8 @@ class ProvidersConfig(Base):
 
     custom: ProviderConfig = Field(default_factory=ProviderConfig)
     deepseek: ProviderConfig = Field(default_factory=ProviderConfig)
+    minimax: ProviderConfig = Field(default_factory=ProviderConfig)
+    qwen: ProviderConfig = Field(default_factory=ProviderConfig)
     mimo: ProviderConfig = Field(default_factory=ProviderConfig)
     azure_openai: ProviderConfig = Field(default_factory=ProviderConfig)
     anthropic: ProviderConfig = Field(default_factory=ProviderConfig)

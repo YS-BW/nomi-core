@@ -13,6 +13,7 @@ from aiohttp import web
 from loguru import logger
 
 from nomi.config.schema import Config
+from nomi.providers.factory.registry import build_provider_catalog
 from nomi.remote.bridge import RemoteBridge
 from nomi.remote.hub import RemoteClient, RemoteHub
 from nomi.remote.schemas import RemoteCommand
@@ -122,6 +123,7 @@ class RemoteServer:
                 build_ready_event(
                     host=self._config.remote.host,
                     port=self._config.remote.port,
+                    provider_catalog=build_provider_catalog(),
                 )
             )
             async for message in websocket:

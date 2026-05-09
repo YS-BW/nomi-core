@@ -27,6 +27,42 @@ def test_list_models_returns_deepseek_catalog() -> None:
     assert "deepseek-v4-pro" in names
 
 
+def test_list_models_returns_qwen_catalog() -> None:
+    """Qwen provider 应返回内置模型目录。"""
+    models = list_models("qwen")
+
+    names = [item.name for item in models]
+    assert "qwen-max" in names
+    assert "qwen3-32b" in names
+
+
+def test_list_models_returns_minimax_catalog() -> None:
+    """MiniMax provider 应返回内置模型目录。"""
+    models = list_models("minimax")
+
+    names = [item.name for item in models]
+    assert "MiniMax-M2.7" in names
+    assert "MiniMax-M2.7-highspeed" in names
+
+
+def test_list_models_returns_moonshot_catalog() -> None:
+    """Moonshot provider 应返回内置模型目录。"""
+    models = list_models("moonshot")
+
+    names = [item.name for item in models]
+    assert "kimi-k2.6" in names
+    assert "kimi-k2-thinking" in names
+
+
+def test_list_models_returns_siliconflow_catalog() -> None:
+    """SiliconFlow provider 应返回内置模型目录。"""
+    models = list_models("siliconflow")
+
+    names = [item.name for item in models]
+    assert "Pro/zai-org/GLM-4.7" in names
+    assert "Pro/deepseek-ai/DeepSeek-V3.2" in names
+
+
 def test_find_model_accepts_prefixed_alias() -> None:
     """带 provider 前缀的模型名应能命中目录条目。"""
     model = find_model("anthropic/claude-sonnet-4-20250514")
@@ -42,6 +78,35 @@ def test_suggest_models_filters_by_prefix() -> None:
 
     assert "gpt-5" in suggestions
     assert "gpt-4.1" in suggestions
+
+
+def test_suggest_models_supports_qwen_prefix() -> None:
+    """Qwen 模型补全应支持品牌前缀过滤。"""
+    suggestions = suggest_models("qwen3", provider="qwen")
+
+    assert "qwen3-32b" in suggestions
+
+
+def test_suggest_models_supports_minimax_prefix() -> None:
+    """MiniMax 模型补全应支持品牌前缀过滤。"""
+    suggestions = suggest_models("m2.7", provider="minimax")
+
+    assert "MiniMax-M2.7" in suggestions
+
+
+def test_suggest_models_supports_moonshot_prefix() -> None:
+    """Moonshot 模型补全应支持 Kimi 前缀过滤。"""
+    suggestions = suggest_models("kimi-k2", provider="moonshot")
+
+    assert "kimi-k2.6" in suggestions
+    assert "kimi-k2-thinking" in suggestions
+
+
+def test_suggest_models_supports_siliconflow_prefix() -> None:
+    """SiliconFlow 模型补全应支持组织前缀过滤。"""
+    suggestions = suggest_models("glm-4.7", provider="siliconflow")
+
+    assert "Pro/zai-org/GLM-4.7" in suggestions
 
 
 def test_get_model_context_limit_returns_known_hint() -> None:
