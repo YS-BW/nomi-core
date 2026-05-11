@@ -13,10 +13,15 @@ GLOBAL_SKILLS_DIR = NOMI_HOME_DIR / "skills"
 DEFAULT_EXTERNAL_SKILL_ROOTS = ("~/.claude/skills", "~/.codex/skills")
 
 
+def get_config_path() -> Path:
+    """返回当前实例正在使用的配置文件路径。"""
+    from nomi.config.loader import get_config_path as _get_config_path
+
+    return _get_config_path()
+
+
 def get_data_dir() -> Path:
     """返回当前实例的运行时数据目录。"""
-    from nomi.config.loader import get_config_path
-
     return ensure_dir(get_config_path().parent)
 
 

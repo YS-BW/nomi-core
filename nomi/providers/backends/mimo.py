@@ -25,6 +25,7 @@ class MiMoProvider(OpenAICompatProvider):
         extra_headers: dict[str, str] | None = None,
         spec=None,
     ) -> None:
+        """初始化 MiMo 适配器并补齐其专属请求头。"""
         headers = dict(extra_headers or {})
         if api_key:
             headers.setdefault("api-key", api_key)

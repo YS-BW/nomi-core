@@ -22,6 +22,7 @@ class DeepSeekProvider(OpenAICompatProvider):
         extra_headers: dict[str, str] | None = None,
         spec=None,
     ) -> None:
+        """初始化 DeepSeek 适配器并记录当前活跃模型名。"""
         super().__init__(
             api_key=api_key,
             api_base=api_base,
@@ -52,6 +53,7 @@ class DeepSeekProvider(OpenAICompatProvider):
         id_map: dict[str, str] = {}
 
         def map_id(value: Any) -> Any:
+            """为 DeepSeek 工具调用 ID 建立稳定映射。"""
             if not isinstance(value, str):
                 return value
             return id_map.setdefault(value, normalize_tool_call_id(value))

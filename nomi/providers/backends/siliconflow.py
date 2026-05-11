@@ -22,6 +22,7 @@ class SiliconFlowProvider(OpenAICompatProvider):
         extra_headers: dict[str, str] | None = None,
         spec=None,
     ) -> None:
+        """初始化 SiliconFlow 适配器。"""
         super().__init__(
             api_key=api_key,
             api_base=api_base,

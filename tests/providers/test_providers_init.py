@@ -21,6 +21,7 @@ def test_importing_providers_package_is_lazy(monkeypatch) -> None:
         "LLMProvider",
         "LLMResponse",
         "AnthropicProvider",
+        "MiMoProvider",
         "OpenAICompatProvider",
         "AzureOpenAIProvider",
     ]

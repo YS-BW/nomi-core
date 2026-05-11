@@ -1,5 +1,4 @@
 import inspect
-from types import SimpleNamespace
 
 
 def test_sanitize_persisted_blocks_truncate_text_shadowing_regression() -> None:
@@ -14,18 +13,21 @@ def test_sanitize_persisted_blocks_truncate_text_shadowing_regression() -> None:
     This test asserts the fixed API exists and truncation works without raising.
     """
 
+    from types import SimpleNamespace
+
+    from nomi.agent.execution.processor import TurnProcessor
     from nomi.agent.loop import AgentLoop
 
     sig = inspect.signature(AgentLoop._sanitize_persisted_blocks)
     assert "should_truncate_text" in sig.parameters
     assert "truncate_text" not in sig.parameters
 
-    dummy = SimpleNamespace(max_tool_result_chars=5)
+    dummy_loop = SimpleNamespace(max_tool_result_chars=5)
+    processor = TurnProcessor(dummy_loop)
     content = [{"type": "text", "text": "0123456789"}]
 
-    out = AgentLoop._sanitize_persisted_blocks(dummy, content, should_truncate_text=True)
+    out = processor.sanitize_persisted_blocks(content, should_truncate_text=True)
     assert isinstance(out, list)
     assert out and out[0]["type"] == "text"
     assert isinstance(out[0]["text"], str)
     assert out[0]["text"] != content[0]["text"]
-

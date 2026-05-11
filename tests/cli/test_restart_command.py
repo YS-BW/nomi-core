@@ -28,7 +28,17 @@ def _make_loop():
     with patch("nomi.agent.loop.ContextBuilder"), \
          patch("nomi.agent.loop.SessionManager"):
         loop = AgentLoop(bus=bus, provider=provider, workspace=workspace)
+    loop.sessions.get_or_create.return_value = _make_session("telegram:u1", [])
     return loop, bus
+
+
+def _make_session(key: str, history: list[dict] | None = None) -> MagicMock:
+    """构造满足当前 Turn Journal 依赖的最小会话桩。"""
+    session = MagicMock()
+    session.key = key
+    session.metadata = {}
+    session.get_history.return_value = history or []
+    return session
 
 
 class TestRestartCommand:
@@ -132,8 +142,7 @@ class TestRestartCommand:
     @pytest.mark.asyncio
     async def test_status_reports_runtime_info(self):
         loop, _bus = _make_loop()
-        session = MagicMock()
-        session.get_history.return_value = [{"role": "user"}] * 3
+        session = _make_session("telegram:u1", [{"role": "user"}] * 3)
         loop.sessions.get_or_create.return_value = session
         loop._state.start_time = time.time() - 125
         loop._state.last_usage = {"prompt_tokens": 0, "completion_tokens": 0}
@@ -172,8 +181,7 @@ class TestRestartCommand:
     @pytest.mark.asyncio
     async def test_status_falls_back_to_last_usage_when_context_estimate_missing(self):
         loop, _bus = _make_loop()
-        session = MagicMock()
-        session.get_history.return_value = [{"role": "user"}]
+        session = _make_session("telegram:u1", [{"role": "user"}])
         loop.sessions.get_or_create.return_value = session
         loop._state.last_usage = {"prompt_tokens": 1200, "completion_tokens": 34}
         loop.consolidator.estimate_session_prompt_tokens = MagicMock(
@@ -191,8 +199,7 @@ class TestRestartCommand:
     @pytest.mark.asyncio
     async def test_process_direct_preserves_render_metadata(self):
         loop, _bus = _make_loop()
-        session = MagicMock()
-        session.get_history.return_value = []
+        session = _make_session("cli:test", [])
         loop.sessions.get_or_create.return_value = session
 
         response = await loop.process_direct("/status", session_key="cli:test")
