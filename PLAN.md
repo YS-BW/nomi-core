@@ -195,8 +195,11 @@ utils         = 低层通用小工具
 - `/new` 现在会清空短期消息和运行态 `metadata`
 - active turn 的 CLI 渲染现在已收口为单写入器；tool hint 不再走 prompt 重绘通道
 - `serve stdio` 复用当前外部事件名：`ready / progress / delta / stream_end / message / error`
-- remote 当前事件面固定为：`ready / session_bound / turn_started / progress / delta / stream_end / message / turn_completed / interrupt_result / status_result / history_snapshot / session_list / task_delivered / sidebar_snapshot / resource_action_result / error`
-- remote 的 `ready` 事件当前额外携带 `provider_catalog`，供 desktop 决定 provider 设置页里的 `apiBase` 只读/可编辑状态
+- remote 当前事件面固定为：`ready / session_bound / turn_started / progress / delta / stream_end / message / turn_completed / interrupt_result / status_result / history_snapshot / session_list / task_delivered / sidebar_snapshot / resource_action_result / provider_state_snapshot / provider_list / provider_settings_updated / provider_updated / active_provider_changed / runtime_reloaded / error`
+- remote 的 `ready` 事件当前额外携带 `provider_catalog + provider_state`
+- remote provider 设置当前固定为 `remote-global` 持久化配置，provider identity 固定为 registry 槽位，不做动态 create/delete
+- desktop 当前通过 `get_provider_state / list_providers / set_provider_settings / update_provider / set_active_provider / reload_runtime` 驱动 provider 设置 UI
+- 当前 provider/model 切换的生效语义固定为 `reload_runtime`，不是热更新，也不是 session-bound
 - 浏览器 demo 当前通过 `ws://.../ws?token=...` 联调 remote；正式客户端仍优先使用 `Authorization: Bearer ...`
 - CLI 根命令当前固定为：`onboard / agent / channel / remote / status`
 - 当前已经有 `nomi channel login weixin`

@@ -12,6 +12,7 @@ class ProviderConfig(Base):
 
     api_key: str = ""
     api_base: str | None = None
+    model: str | None = None
     extra_headers: dict[str, str] | None = None
 
 

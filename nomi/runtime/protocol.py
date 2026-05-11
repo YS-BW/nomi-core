@@ -97,6 +97,7 @@ def build_error_event(
     session_id: str | None = None,
     code: str | None = None,
     command: str | None = None,
+    fields: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """构造错误事件。"""
     payload: dict[str, Any] = {"type": "error", "message": message}
@@ -106,6 +107,8 @@ def build_error_event(
         payload["code"] = code
     if command is not None:
         payload["command"] = command
+    if fields:
+        payload["fields"] = fields
     return payload
 
 
@@ -230,6 +233,78 @@ def build_resource_action_result_event(
     if mcp_name:
         payload["mcp_name"] = mcp_name
     return payload
+
+
+def build_provider_state_snapshot_event(*, provider_state: dict[str, Any]) -> dict[str, Any]:
+    """构造 provider 状态快照事件。"""
+    return {
+        "type": "provider_state_snapshot",
+        "provider_state": provider_state,
+    }
+
+
+def build_provider_list_event(*, provider_list: dict[str, Any]) -> dict[str, Any]:
+    """构造 provider 列表事件。"""
+    return {
+        "type": "provider_list",
+        "provider_list": provider_list,
+    }
+
+
+def build_provider_settings_updated_event(
+    *,
+    provider: str,
+    settings: dict[str, Any],
+    requires_runtime_reload: bool,
+) -> dict[str, Any]:
+    """构造 provider 设置保存结果事件。"""
+    return {
+        "type": "provider_settings_updated",
+        "provider": provider,
+        "settings": settings,
+        "requires_runtime_reload": requires_runtime_reload,
+    }
+
+
+def build_provider_updated_event(
+    *,
+    provider: str,
+    settings: dict[str, Any],
+    requires_runtime_reload: bool,
+) -> dict[str, Any]:
+    """构造 provider 更新结果事件。"""
+    return {
+        "type": "provider_updated",
+        "provider": provider,
+        "settings": settings,
+        "requires_runtime_reload": requires_runtime_reload,
+    }
+
+
+def build_active_provider_changed_event(
+    *,
+    active: dict[str, Any],
+    requires_runtime_reload: bool,
+) -> dict[str, Any]:
+    """构造 active provider 切换结果事件。"""
+    return {
+        "type": "active_provider_changed",
+        "active": active,
+        "requires_runtime_reload": requires_runtime_reload,
+    }
+
+
+def build_runtime_reloaded_event(
+    *,
+    active: dict[str, Any],
+    provider_state: dict[str, Any],
+) -> dict[str, Any]:
+    """构造 runtime 重载完成事件。"""
+    return {
+        "type": "runtime_reloaded",
+        "active": active,
+        "provider_state": provider_state,
+    }
 
 
 def build_task_delivered_event(

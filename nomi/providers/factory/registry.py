@@ -323,3 +323,66 @@ def build_provider_catalog() -> dict[str, list[dict[str, Any]]]:
             for spec in PROVIDERS
         ]
     }
+
+
+def build_provider_state(config) -> dict[str, Any]:
+    """构造供远端 UI 消费的 provider 当前持久化状态。"""
+
+    active_provider = _normalize_provider_name(str(config.agents.defaults.provider or ""))
+    active_model = str(config.agents.defaults.model or "").strip()
+    providers: list[dict[str, Any]] = []
+
+    for spec in PROVIDERS:
+        provider_config = getattr(config.providers, spec.name)
+        api_key = str(provider_config.api_key or "").strip()
+        api_base = _normalize_optional_text(provider_config.api_base)
+        effective_api_base = api_base or (spec.default_api_base or None)
+        providers.append(
+            {
+                "provider": spec.name,
+                "display_name": spec.label,
+                "backend": spec.backend,
+                "builtin": spec.name != "custom",
+                "editable": True,
+                "deletable": False,
+                "api_key_set": bool(api_key),
+                "api_key_preview": _build_api_key_preview(api_key),
+                "saved_model": _normalize_optional_text(getattr(provider_config, "model", None)),
+                "api_base": effective_api_base,
+                "api_base_editable": spec.name == "custom",
+                "default_api_base": spec.default_api_base or None,
+                "source": "config",
+            }
+        )
+
+    return {
+        "providers": providers,
+        "active": {
+            "provider": active_provider,
+            "model": active_model,
+        },
+        "apply_mode": "reload_runtime",
+    }
+
+
+def _normalize_provider_name(name: str) -> str:
+    """把 provider 名称归一化为配置字段名。"""
+
+    return to_snake(name.replace("-", "_"))
+
+
+def _normalize_optional_text(value: object) -> str | None:
+    """把可选文本值归一化为去空白后的字符串。"""
+
+    text = str(value or "").strip()
+    return text or None
+
+
+def _build_api_key_preview(api_key: str) -> str | None:
+    """为远端 UI 构造脱敏 API Key 预览。"""
+
+    if not api_key:
+        return None
+    if len(api_key) <= 4:
+        return api_key
+    return f"…{api_key[-4:]}"

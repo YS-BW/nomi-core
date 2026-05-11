@@ -12,6 +12,7 @@ from nomi.bus.events import OutboundMessage
 from nomi.bus.queue import MessageBus
 from nomi.config.schema import Config
 from nomi.remote.server import RemoteServer
+from nomi.runtime.errors import ProviderApiBaseNotEditableError
 from nomi.runtime.models import InterruptResult, RuntimeStatusSnapshot
 from nomi.session.errors import (
     DuplicateSessionIdError,
@@ -48,6 +49,33 @@ class _FakeRuntime:
         self.uninstalled_skills: list[str] = []
         self.mcp_actions: list[tuple[str, str, dict | None]] = []
         self.clear_calls = 0
+        self.provider_state = {
+            "providers": [
+                {
+                    "provider": "deepseek",
+                    "display_name": "DeepSeek",
+                    "backend": "deepseek",
+                    "builtin": True,
+                    "editable": True,
+                    "deletable": False,
+                    "api_key_set": True,
+                    "api_key_preview": "…1234",
+                    "saved_model": "deepseek-chat",
+                    "api_base": "https://api.deepseek.com",
+                    "api_base_editable": False,
+                    "default_api_base": "https://api.deepseek.com",
+                    "source": "config",
+                }
+            ],
+            "active": {
+                "provider": "deepseek",
+                "model": "deepseek-chat",
+            },
+            "apply_mode": "reload_runtime",
+        }
+        self.provider_updates: list[dict] = []
+        self.active_provider_updates: list[dict] = []
+        self.runtime_reload_calls = 0
 
     async def send_user_message(
         self,
@@ -244,6 +272,87 @@ class _FakeRuntime:
         self.clear_calls += 1
         self.sidebar = {"tasks": [], "skills": [], "mcpServers": []}
 
+    def get_provider_state_snapshot(self) -> dict:
+        return self.provider_state
+
+    def list_providers(self) -> dict:
+        return self.provider_state
+
+    def set_provider_settings(self, provider_name: str, *, api_key=Ellipsis, api_base=Ellipsis, model=Ellipsis) -> dict:
+        update = {
+            "provider": provider_name,
+            "api_key": api_key,
+            "api_base": api_base,
+            "model": model,
+        }
+        self.provider_updates.append(update)
+        settings = {
+            "provider": provider_name,
+            "api_key_set": api_key not in (Ellipsis, None, ""),
+            "api_key_preview": "…9999" if api_key not in (Ellipsis, None, "") else None,
+            "saved_model": None if model in (Ellipsis, None, "") else model,
+            "api_base": None if api_base in (Ellipsis, None, "") else api_base,
+        }
+        return {
+            "provider": provider_name,
+            "settings": settings,
+            "requires_runtime_reload": True,
+        }
+
+    def update_provider(
+        self,
+        provider_name: str,
+        *,
+        api_key=Ellipsis,
+        api_base=Ellipsis,
+        model=Ellipsis,
+        clear_api_key=Ellipsis,
+    ) -> dict:
+        update = {
+            "provider": provider_name,
+            "api_key": api_key,
+            "api_base": api_base,
+            "model": model,
+            "clear_api_key": clear_api_key,
+        }
+        self.provider_updates.append(update)
+        settings = {
+            "provider": provider_name,
+            "display_name": "Custom" if provider_name == "custom" else "DeepSeek",
+            "backend": "openai_compat" if provider_name == "custom" else "deepseek",
+            "builtin": provider_name != "custom",
+            "editable": True,
+            "deletable": False,
+            "api_key_set": False if clear_api_key is True else api_key not in (Ellipsis, None, ""),
+            "api_key_preview": None if clear_api_key is True or api_key in (Ellipsis, None, "") else "…9999",
+            "saved_model": None if model in (Ellipsis, None, "") else model,
+            "api_base": None if api_base in (Ellipsis, None, "") else api_base,
+            "api_base_editable": provider_name == "custom",
+            "default_api_base": None if provider_name == "custom" else "https://api.deepseek.com",
+            "source": "config",
+        }
+        return {
+            "provider": provider_name,
+            "settings": settings,
+            "requires_runtime_reload": True,
+        }
+
+    def set_active_provider(self, provider_name: str, *, model: str | None = None) -> dict:
+        self.active_provider_updates.append({"provider": provider_name, "model": model})
+        active = {"provider": provider_name, "model": model or "fallback-model"}
+        self.provider_state["active"] = active
+        return {
+            "active": active,
+            "requires_runtime_reload": True,
+        }
+
+    async def reload_runtime(self) -> dict:
+        self.runtime_reload_calls += 1
+        return {
+            "active": dict(self.provider_state["active"]),
+            "provider_state": self.provider_state,
+        }
+
 
 @pytest.mark.asyncio
 async def test_remote_server_websocket_protocol() -> None:
@@ -264,6 +373,8 @@ async def test_remote_server_websocket_protocol() -> None:
             ready = json.loads(await websocket.recv())
             assert ready["type"] == "ready"
             assert ready["provider_catalog"]["providers"]
+            assert ready["provider_state"]["active"]["provider"] == "deepseek"
+            assert ready["provider_state"]["apply_mode"] == "reload_runtime"
             custom = next(item for item in ready["provider_catalog"]["providers"] if item["name"] == "custom")
             deepseek = next(item for item in ready["provider_catalog"]["providers"] if item["name"] == "deepseek")
             assert custom["api_base_editable"] is True
@@ -386,6 +497,142 @@ async def test_remote_server_websocket_protocol() -> None:
             interrupt = json.loads(await websocket.recv())
             assert interrupt["type"] == "interrupt_result"
             assert runtime.interrupt_calls == ["desktop:test"]
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_remote_server_provider_state_commands() -> None:
+    config = Config()
+    config.remote.enabled = True
+    config.remote.host = "127.0.0.1"
+    config.remote.port = 8887
+    config.remote.auth_token = "secret-token"
+    runtime = _FakeRuntime()
+    server = RemoteServer(config, runtime)  # type: ignore[arg-type]
+
+    await server.start()
+    try:
+        async with connect(
+            "ws://127.0.0.1:8887/ws",
+            additional_headers={"Authorization": "Bearer secret-token"},
+        ) as websocket:
+            ready = json.loads(await websocket.recv())
+            assert ready["type"] == "ready"
+
+            await websocket.send(json.dumps({"type": "get_provider_state"}))
+            snapshot = json.loads(await websocket.recv())
+            assert snapshot["type"] == "provider_state_snapshot"
+            assert snapshot["provider_state"]["active"]["provider"] == "deepseek"
+            assert snapshot["provider_state"]["providers"][0]["display_name"] == "DeepSeek"
+
+            await websocket.send(json.dumps({"type": "list_providers"}))
+            provider_list = json.loads(await websocket.recv())
+            assert provider_list["type"] == "provider_list"
+            assert provider_list["provider_list"]["providers"][0]["backend"] == "deepseek"
+
+            await websocket.send(
+                json.dumps(
+                    {
+                        "type": "set_provider_settings",
+                        "provider": "custom",
+                        "api_key": "sk-demo",
+                        "api_base": "https://example.com/v1",
+                        "model": "gpt-test",
+                    }
+                )
+            )
+            updated = json.loads(await websocket.recv())
+            assert updated["type"] == "provider_settings_updated"
+            assert updated["provider"] == "custom"
+            assert updated["settings"]["saved_model"] == "gpt-test"
+            assert updated["requires_runtime_reload"] is True
+            assert runtime.provider_updates[0]["provider"] == "custom"
+
+            await websocket.send(
+                json.dumps(
+                    {
+                        "type": "update_provider",
+                        "provider": "custom",
+                        "clear_api_key": True,
+                    }
+                )
+            )
+            updated_v2 = json.loads(await websocket.recv())
+            assert updated_v2["type"] == "provider_updated"
+            assert updated_v2["provider"] == "custom"
+            assert updated_v2["settings"]["api_key_set"] is False
+
+            await websocket.send(
+                json.dumps(
+                    {
+                        "type": "set_active_provider",
+                        "provider": "minimax",
+                        "model": "MiniMax-M2.7",
+                    }
+                )
+            )
+            active = json.loads(await websocket.recv())
+            assert active["type"] == "active_provider_changed"
+            assert active["active"]["provider"] == "minimax"
+            assert active["active"]["model"] == "MiniMax-M2.7"
+            assert active["requires_runtime_reload"] is True
+
+            await websocket.send(json.dumps({"type": "reload_runtime"}))
+            reloaded = json.loads(await websocket.recv())
+            assert reloaded["type"] == "runtime_reloaded"
+            assert reloaded["active"]["provider"] == "minimax"
+            assert reloaded["provider_state"]["apply_mode"] == "reload_runtime"
+            assert runtime.runtime_reload_calls == 1
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_remote_server_provider_settings_validation_error_includes_fields() -> None:
+    config = Config()
+    config.remote.enabled = True
+    config.remote.host = "127.0.0.1"
+    config.remote.port = 8888
+    config.remote.auth_token = "secret-token"
+    runtime = _FakeRuntime()
+
+    def _raise_validation_error(*_args, **_kwargs):
+        raise ProviderApiBaseNotEditableError(
+            "api_base is not editable for provider deepseek",
+            fields=[
+                {
+                    "field": "api_base",
+                    "code": "not_editable",
+                    "message": "api_base is read-only for this provider",
+                }
+            ],
+        )
+
+    runtime.set_provider_settings = _raise_validation_error  # type: ignore[method-assign]
+    server = RemoteServer(config, runtime)  # type: ignore[arg-type]
+
+    await server.start()
+    try:
+        async with connect(
+            "ws://127.0.0.1:8888/ws",
+            additional_headers={"Authorization": "Bearer secret-token"},
+        ) as websocket:
+            _ = json.loads(await websocket.recv())
+            await websocket.send(
+                json.dumps(
+                    {
+                        "type": "set_provider_settings",
+                        "provider": "deepseek",
+                        "api_base": "https://example.com/v1",
+                    }
+                )
+            )
+            error = json.loads(await websocket.recv())
+            assert error["type"] == "error"
+            assert error["code"] == "provider_api_base_not_editable"
+            assert error["command"] == "set_provider_settings"
+            assert error["fields"][0]["field"] == "api_base"
     finally:
         await server.stop()
 

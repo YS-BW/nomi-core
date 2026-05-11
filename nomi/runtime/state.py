@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from nomi.agent.loop import AgentLoop
@@ -33,6 +34,8 @@ class RuntimeState:
     bus: MessageBus
     provider: LLMProvider
     agent_loop: AgentLoop
+    provider_builder: Callable[[Config], LLMProvider]
+    agent_loop_factory: Callable[..., AgentLoop]
     transcription_provider: QwenAsrTranscriptionProvider | None = None
     serve_task: asyncio.Task[None] | None = None
     started: bool = False

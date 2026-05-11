@@ -5,12 +5,15 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
+from nomi.config.loader import save_config
 from nomi.config.schema import Config
 from nomi.runtime.app import NomiRuntime
+from nomi.runtime.errors import RuntimeReloadBusyError
 from nomi.session.errors import SessionNotFoundError
 from nomi.session.manager import SessionManager
 
@@ -19,6 +22,23 @@ class _LoopStub:
     def __init__(self, workspace: Path) -> None:
         self.sessions = SessionManager(workspace)
         self.process_direct = AsyncMock(return_value="ok")
+
+
+class _ReloadLoopStub:
+    def __init__(self, workspace: Path, provider: object, model: str | None) -> None:
+        self.workspace = workspace
+        self.provider = provider
+        self.model = model
+        self.sessions = SessionManager(workspace)
+        self._control = SimpleNamespace(active_tasks={}, pending_queues={})
+        self.stop_calls = 0
+        self.close_mcp = AsyncMock(return_value=None)
+
+    async def run(self) -> None:
+        return None
+
+    def stop(self) -> None:
+        self.stop_calls += 1
 
 
 @pytest.mark.asyncio
@@ -126,3 +146,163 @@ def test_runtime_missing_session_raises_session_not_found(tmp_path: Path) -> Non
 
     with pytest.raises(SessionNotFoundError):
         runtime.load_session_messages("desktop:missing", limit=1)
+
+
+def test_runtime_provider_settings_persist_to_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "workspace")
+    config.agents.defaults.provider = "deepseek"
+    config.agents.defaults.model = "deepseek-chat"
+    config_path = tmp_path / "config.json"
+    save_config(config, config_path)
+    monkeypatch.setattr("nomi.runtime.app.get_config_path", lambda: config_path)
+
+    runtime = NomiRuntime.from_config(
+        config,
+        provider_builder=lambda _config: object(),
+        agent_loop_factory=lambda **kwargs: _ReloadLoopStub(
+            workspace=kwargs["workspace"],
+            provider=kwargs["provider"],
+            model=kwargs["model"],
+        ),
+    )
+
+    result = runtime.set_provider_settings(
+        "custom",
+        api_key="sk-test",
+        api_base="https://example.com/v1",
+        model="gpt-4.1",
+    )
+
+    saved = Config.model_validate_json(config_path.read_text(encoding="utf-8"))
+    assert result["provider"] == "custom"
+    assert result["settings"]["saved_model"] == "gpt-4.1"
+    assert saved.providers.custom.api_key == "sk-test"
+    assert saved.providers.custom.api_base == "https://example.com/v1"
+    assert saved.providers.custom.model == "gpt-4.1"
+
+
+def test_runtime_list_providers_includes_management_fields(tmp_path: Path) -> None:
+    """provider 列表应返回可直接用于管理面板的字段。"""
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "workspace")
+    config.providers.custom.api_key = "sk-custom"
+    config.providers.custom.api_base = "https://example.com/v1"
+    config.providers.custom.model = "gpt-4.1"
+    runtime = NomiRuntime.from_config(
+        config,
+        provider_builder=lambda _config: object(),
+        agent_loop_factory=lambda **kwargs: _ReloadLoopStub(
+            workspace=kwargs["workspace"],
+            provider=kwargs["provider"],
+            model=kwargs["model"],
+        ),
+    )
+
+    result = runtime.list_providers()
+
+    custom = next(item for item in result["providers"] if item["provider"] == "custom")
+    assert custom["display_name"] == "Custom"
+    assert custom["backend"] == "openai_compat"
+    assert custom["api_base_editable"] is True
+    assert custom["editable"] is True
+    assert custom["deletable"] is False
+    assert result["apply_mode"] == "reload_runtime"
+
+
+def test_runtime_update_provider_can_clear_api_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """update_provider 应支持显式清空 api_key。"""
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "workspace")
+    config.providers.custom.api_key = "sk-custom"
+    config.providers.custom.api_base = "https://example.com/v1"
+    config.providers.custom.model = "gpt-4.1"
+    config_path = tmp_path / "config.json"
+    save_config(config, config_path)
+    monkeypatch.setattr("nomi.runtime.app.get_config_path", lambda: config_path)
+
+    runtime = NomiRuntime.from_config(
+        config,
+        provider_builder=lambda _config: object(),
+        agent_loop_factory=lambda **kwargs: _ReloadLoopStub(
+            workspace=kwargs["workspace"],
+            provider=kwargs["provider"],
+            model=kwargs["model"],
+        ),
+    )
+
+    result = runtime.update_provider("custom", clear_api_key=True)
+
+    saved = Config.model_validate_json(config_path.read_text(encoding="utf-8"))
+    assert result["settings"]["api_key_set"] is False
+    assert saved.providers.custom.api_key == ""
+
+
+@pytest.mark.asyncio
+async def test_runtime_set_active_provider_and_reload_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "workspace")
+    config.agents.defaults.provider = "deepseek"
+    config.agents.defaults.model = "deepseek-chat"
+    config.providers.minimax.api_key = "sk-minimax"
+    config.providers.minimax.model = "MiniMax-M2.7"
+    config_path = tmp_path / "config.json"
+    save_config(config, config_path)
+    monkeypatch.setattr("nomi.runtime.app.get_config_path", lambda: config_path)
+
+    created_loops: list[_ReloadLoopStub] = []
+
+    def _build_loop(**kwargs) -> _ReloadLoopStub:
+        loop = _ReloadLoopStub(
+            workspace=kwargs["workspace"],
+            provider=kwargs["provider"],
+            model=kwargs["model"],
+        )
+        created_loops.append(loop)
+        return loop
+
+    runtime = NomiRuntime.from_config(
+        config,
+        provider_builder=lambda _config: object(),
+        agent_loop_factory=_build_loop,
+    )
+
+    changed = runtime.set_active_provider("minimax", model="MiniMax-M2.7")
+    reloaded = await runtime.reload_runtime()
+
+    assert changed["active"] == {"provider": "minimax", "model": "MiniMax-M2.7"}
+    assert reloaded["active"] == {"provider": "minimax", "model": "MiniMax-M2.7"}
+    assert runtime.state.config.agents.defaults.provider == "minimax"
+    assert runtime.state.config.agents.defaults.model == "MiniMax-M2.7"
+    assert created_loops[-1].model == "MiniMax-M2.7"
+
+
+@pytest.mark.asyncio
+async def test_runtime_reload_runtime_rejects_when_turn_is_active(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "workspace")
+    config_path = tmp_path / "config.json"
+    save_config(config, config_path)
+    monkeypatch.setattr("nomi.runtime.app.get_config_path", lambda: config_path)
+
+    runtime = NomiRuntime.from_config(
+        config,
+        provider_builder=lambda _config: object(),
+        agent_loop_factory=lambda **kwargs: _ReloadLoopStub(
+            workspace=kwargs["workspace"],
+            provider=kwargs["provider"],
+            model=kwargs["model"],
+        ),
+    )
+
+    active_task = SimpleNamespace(done=lambda: False)
+    runtime.agent_loop._control.active_tasks["desktop:test"] = [active_task]
+
+    with pytest.raises(RuntimeReloadBusyError):
+        await runtime.reload_runtime()

@@ -7,19 +7,30 @@ import json
 import shutil
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from nomi.agent.loop import AgentLoop
 from nomi.agent.skills.manager import SkillManager
 from nomi.bus.events import InboundMessage, OutboundMessage
 from nomi.bus.queue import MessageBus
-from nomi.config.loader import get_config_path, load_config, save_config
+from nomi.config.loader import get_config_path, load_config, resolve_config_env_vars, save_config
 from nomi.config.paths import get_data_dir
 from nomi.config.schema import Config
 from nomi.config.schema.tools import MCPServerConfig
 from nomi.providers.base import LLMProvider
 from nomi.providers.capabilities.transcription import build_transcription_provider
 from nomi.providers.factory.build import build_provider
+from nomi.providers.factory.registry import build_provider_state, find_by_name
+from nomi.runtime.errors import (
+    ActiveProviderNotConfiguredError,
+    ModelRequiredError,
+    ProviderApiBaseNotEditableError,
+    ProviderNotFoundError,
+    ProviderSettingsInvalidError,
+    RuntimeReloadBusyError,
+    RuntimeReloadFailedError,
+)
 from nomi.runtime.lifecycle import RuntimeLifecycle
 from nomi.runtime.models import (
     DreamLogResult,
@@ -34,6 +45,15 @@ from nomi.session.manager import Session
 
 if TYPE_CHECKING:
     from nomi.providers.base import LLMProvider
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeComponents:
+    """描述 runtime 运行中可替换的核心部件集合。"""
+
+    provider: LLMProvider
+    transcription_provider: object | None
+    agent_loop: AgentLoop
 
 
 class NomiRuntime:
@@ -76,34 +96,21 @@ class NomiRuntime:
         resolved_agent_loop_factory = agent_loop_factory or AgentLoop
 
         bus = resolved_bus_factory()
-        provider = resolved_provider_builder(config)
-        transcription_provider = build_transcription_provider(config)
-        defaults = config.agents.defaults
-        agent_loop = resolved_agent_loop_factory(
+        components = cls._build_runtime_components(
+            config,
             bus=bus,
-            provider=provider,
-            workspace=config.workspace_path,
-            model=defaults.model,
-            max_iterations=defaults.max_tool_iterations,
-            context_window_tokens=defaults.context_window_tokens,
-            web_config=config.tools.web,
-            context_block_limit=defaults.context_block_limit,
-            max_tool_result_chars=defaults.max_tool_result_chars,
-            provider_retry_mode=defaults.provider_retry_mode,
-            exec_config=config.tools.exec,
-            restrict_to_workspace=config.tools.restrict_to_workspace,
-            mcp_servers=config.tools.mcp_servers,
-            timezone=defaults.timezone,
-            unified_session=defaults.unified_session,
-            idle_compact_after_minutes=defaults.idle_compact_after_minutes,
+            provider_builder=resolved_provider_builder,
+            agent_loop_factory=resolved_agent_loop_factory,
         )
         return cls(
             RuntimeState(
                 config=config,
                 bus=bus,
-                provider=provider,
-                agent_loop=agent_loop,
-                transcription_provider=transcription_provider,
+                provider=components.provider,
+                agent_loop=components.agent_loop,
+                provider_builder=resolved_provider_builder,
+                agent_loop_factory=resolved_agent_loop_factory,
+                transcription_provider=components.transcription_provider,
             )
         )
 
@@ -438,6 +445,173 @@ class NomiRuntime:
         if session is None:
             raise SessionNotFoundError("session not found", session_id=session_id)
         return session
+
+    def get_provider_state_snapshot(self) -> dict:
+        """返回远端 provider 设置页所需的当前状态快照。"""
+        return build_provider_state(self.state.config)
+
+    def list_providers(self) -> dict:
+        """返回远端 provider 管理页所需的完整列表。"""
+        return build_provider_state(self.state.config)
+
+    def update_provider(
+        self,
+        provider_name: str,
+        *,
+        api_key=Ellipsis,
+        api_base=Ellipsis,
+        model=Ellipsis,
+        clear_api_key=Ellipsis,
+    ) -> dict:
+        """更新单个 provider 的持久化设置。"""
+        spec = self._require_provider_spec(provider_name)
+        config = self._load_runtime_config_from_disk()
+        provider_config = getattr(config.providers, spec.name)
+        requires_runtime_reload = False
+
+        if clear_api_key is not Ellipsis and api_key is not Ellipsis:
+            raise ProviderSettingsInvalidError(
+                "api_key and clear_api_key cannot be set together",
+                fields=[
+                    {
+                        "field": "api_key",
+                        "code": "conflict",
+                        "message": "api_key conflicts with clear_api_key",
+                    },
+                    {
+                        "field": "clear_api_key",
+                        "code": "conflict",
+                        "message": "clear_api_key conflicts with api_key",
+                    },
+                ],
+            )
+
+        if api_key is not Ellipsis:
+            provider_config.api_key = str(api_key or "").strip()
+            if self._is_active_provider(config, spec.name):
+                requires_runtime_reload = True
+        elif bool(clear_api_key):
+            provider_config.api_key = ""
+            if self._is_active_provider(config, spec.name):
+                requires_runtime_reload = True
+
+        if api_base is not Ellipsis:
+            if spec.name != "custom":
+                raise ProviderApiBaseNotEditableError(
+                    f"api_base is not editable for provider {spec.name}",
+                    fields=[
+                        {
+                            "field": "api_base",
+                            "code": "not_editable",
+                            "message": "api_base is read-only for this provider",
+                        }
+                    ],
+                )
+            provider_config.api_base = self._normalize_optional_text(api_base)
+            if self._is_active_provider(config, spec.name):
+                requires_runtime_reload = True
+
+        if model is not Ellipsis:
+            normalized_model = self._normalize_optional_text(model)
+            provider_config.model = normalized_model
+            if self._is_active_provider(config, spec.name) and normalized_model is not None:
+                config.agents.defaults.model = normalized_model
+                requires_runtime_reload = True
+
+        self._validate_active_provider_config(config, target_provider=spec.name)
+        self._save_runtime_config(config)
+        return {
+            "provider": spec.name,
+            "settings": self._find_provider_state_item(config, spec.name),
+            "requires_runtime_reload": requires_runtime_reload,
+        }
+
+    def set_provider_settings(
+        self,
+        provider_name: str,
+        *,
+        api_key=Ellipsis,
+        api_base=Ellipsis,
+        model=Ellipsis,
+    ) -> dict:
+        """兼容旧协议的 provider 设置保存入口。"""
+        return self.update_provider(
+            provider_name,
+            api_key=api_key,
+            api_base=api_base,
+            model=model,
+        )
+
+    def set_active_provider(self, provider_name: str, *, model: str | None = None) -> dict:
+        """切换当前 remote 默认使用的 provider/model 组合。"""
+        spec = self._require_provider_spec(provider_name)
+        config = self._load_runtime_config_from_disk()
+        provider_config = getattr(config.providers, spec.name)
+        resolved_model = self._normalize_optional_text(model)
+        if resolved_model is None:
+            resolved_model = self._normalize_optional_text(provider_config.model)
+        if resolved_model is None and self._is_active_provider(config, spec.name):
+            resolved_model = self._normalize_optional_text(config.agents.defaults.model)
+        if resolved_model is None:
+            raise ModelRequiredError(
+                f"model is required for provider {spec.name}",
+                fields=[
+                    {
+                        "field": "model",
+                        "code": "required",
+                        "message": "model is required for this provider",
+                    }
+                ],
+            )
+
+        config.agents.defaults.provider = spec.name
+        config.agents.defaults.model = resolved_model
+        provider_config.model = resolved_model
+        self._validate_active_provider_config(config, target_provider=spec.name)
+        self._save_runtime_config(config)
+        return {
+            "active": {
+                "provider": spec.name,
+                "model": resolved_model,
+            },
+            "requires_runtime_reload": True,
+        }
+
+    async def reload_runtime(self) -> dict:
+        """按当前持久化配置重建 provider 和 AgentLoop。"""
+        self._assert_runtime_reload_allowed()
+        config = self._load_runtime_config_from_disk()
+        try:
+            components = self._build_runtime_components(
+                config,
+                bus=self.bus,
+                provider_builder=self.state.provider_builder,
+                agent_loop_factory=self.state.agent_loop_factory,
+            )
+        except ActiveProviderNotConfiguredError:
+            raise
+        except Exception as exc:
+            raise RuntimeReloadFailedError(str(exc)) from exc
+
+        was_running = self.lifecycle.is_running() or self.state.started
+        if was_running:
+            await self.lifecycle.close()
+
+        self.state.config = config
+        self.state.provider = components.provider
+        self.state.transcription_provider = components.transcription_provider
+        self.state.agent_loop = components.agent_loop
+
+        if was_running:
+            await self.lifecycle.start()
+
+        return {
+            "active": {
+                "provider": str(config.agents.defaults.provider or "").strip(),
+                "model": str(config.agents.defaults.model or "").strip(),
+            },
+            "provider_state": build_provider_state(config),
+        }
 
     def get_sidebar_snapshot(self) -> dict:
         """返回远端资源侧栏快照。"""
@@ -862,3 +1036,128 @@ class NomiRuntime:
         save_config(config, get_config_path())
         self.state.config = config
         await self.agent_loop.refresh_mcp_servers(config.tools.mcp_servers)
+
+    @classmethod
+    def _build_runtime_components(
+        cls,
+        config: Config,
+        *,
+        bus: MessageBus,
+        provider_builder: Callable[[Config], LLMProvider],
+        agent_loop_factory: Callable[..., AgentLoop],
+    ) -> RuntimeComponents:
+        """按给定配置和复用总线构造一套可替换的 runtime 部件。"""
+        try:
+            provider = provider_builder(config)
+        except ValueError as exc:
+            raise ActiveProviderNotConfiguredError(str(exc)) from exc
+        transcription_provider = build_transcription_provider(config)
+        defaults = config.agents.defaults
+        agent_loop = agent_loop_factory(
+            bus=bus,
+            provider=provider,
+            workspace=config.workspace_path,
+            model=defaults.model,
+            max_iterations=defaults.max_tool_iterations,
+            context_window_tokens=defaults.context_window_tokens,
+            web_config=config.tools.web,
+            context_block_limit=defaults.context_block_limit,
+            max_tool_result_chars=defaults.max_tool_result_chars,
+            provider_retry_mode=defaults.provider_retry_mode,
+            exec_config=config.tools.exec,
+            restrict_to_workspace=config.tools.restrict_to_workspace,
+            mcp_servers=config.tools.mcp_servers,
+            timezone=defaults.timezone,
+            unified_session=defaults.unified_session,
+            idle_compact_after_minutes=defaults.idle_compact_after_minutes,
+        )
+        return RuntimeComponents(
+            provider=provider,
+            transcription_provider=transcription_provider,
+            agent_loop=agent_loop,
+        )
+
+    def _load_runtime_config_from_disk(self) -> Config:
+        """读取并解析当前活动配置文件。"""
+        return resolve_config_env_vars(load_config(get_config_path()))
+
+    def _save_runtime_config(self, config: Config) -> None:
+        """保存 runtime 配置并更新当前内存态镜像。"""
+        save_config(config, get_config_path())
+        self.state.config = config
+
+    def _require_provider_spec(self, provider_name: str):
+        """读取并校验一个 provider 元数据定义。"""
+        spec = find_by_name(provider_name)
+        if spec is None:
+            raise ProviderNotFoundError(
+                f"provider not found: {provider_name}",
+                fields=[
+                    {
+                        "field": "provider",
+                        "code": "not_found",
+                        "message": "provider does not exist",
+                    }
+                ],
+            )
+        return spec
+
+    @staticmethod
+    def _normalize_optional_text(value: object) -> str | None:
+        """把可选文本值归一化成去空白后的字符串。"""
+        text = str(value or "").strip()
+        return text or None
+
+    @staticmethod
+    def _is_active_provider(config: Config, provider_name: str) -> bool:
+        """判断给定 provider 是否就是当前 active provider。"""
+        return str(config.agents.defaults.provider or "").strip() == provider_name
+
+    @staticmethod
+    def _find_provider_state_item(config: Config, provider_name: str) -> dict:
+        """从 provider state 快照中提取单个 provider 条目。"""
+        snapshot = build_provider_state(config)
+        for item in snapshot["providers"]:
+            if str(item.get("provider") or "") == provider_name:
+                return item
+        raise ProviderNotFoundError(f"provider not found: {provider_name}")
+
+    def _validate_active_provider_config(self, config: Config, *, target_provider: str) -> None:
+        """验证当前 active provider 选择是否可成功构造。"""
+        active_provider = str(config.agents.defaults.provider or "").strip()
+        if active_provider != target_provider:
+            return
+        try:
+            self.state.provider_builder(config)
+        except ValueError as exc:
+            raise ActiveProviderNotConfiguredError(str(exc)) from exc
+
+    def _assert_runtime_reload_allowed(self) -> None:
+        """确保当前没有进行中的 turn，允许重载 runtime。"""
+        active_sessions = [
+            session_id
+            for session_id, tasks in self.agent_loop._control.active_tasks.items()
+            if any(not task.done() for task in tasks)
+        ]
+        if active_sessions:
+            raise RuntimeReloadBusyError(
+                "runtime reload is blocked while turns are still running",
+                fields=[
+                    {
+                        "field": "runtime",
+                        "code": "busy",
+                        "message": "stop the current turn before reloading runtime",
+                    }
+                ],
+            )
+        if self.agent_loop._control.pending_queues:
+            raise RuntimeReloadBusyError(
+                "runtime reload is blocked while pending messages still exist",
+                fields=[
+                    {
+                        "field": "runtime",
+                        "code": "busy",
+                        "message": "wait until queued follow-up messages are drained",
+                    }
+                ],
+            )

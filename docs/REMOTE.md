@@ -159,6 +159,11 @@ Authorization: Bearer <remote.auth_token>
   - `mcp_delete`
   - `mcp_enable`
   - `mcp_disable`
+- Provider 设置：
+  - `get_provider_state`
+  - `set_provider_settings`
+  - `set_active_provider`
+  - `reload_runtime`
 - 运行态管理：
   - `clear_remote_runtime`
 
@@ -183,11 +188,18 @@ Authorization: Bearer <remote.auth_token>
 - `task_delivered`
 - `sidebar_snapshot`
 - `resource_action_result`
+- `provider_state_snapshot`
+- `provider_list`
+- `provider_settings_updated`
+- `provider_updated`
+- `active_provider_changed`
+- `runtime_reloaded`
 - `error`
 
 `ready` 当前除了 `host / port` 外，还会额外携带：
 
 - `provider_catalog`
+- `provider_state`
 
 其中每个 provider 条目至少包含：
 
@@ -198,6 +210,51 @@ Authorization: Bearer <remote.auth_token>
 - `api_base_editable`
 
 desktop 应使用这份 catalog 决定 provider 设置页里 `apiBase` 的展示和禁用状态，而不是自己硬编码哪些 provider 可改。
+
+`provider_state` 当前固定形状：
+
+- `providers`
+  - 每个条目包含 `provider / api_key_set / api_key_preview / saved_model / api_base`
+- `active`
+  - 当前 remote 默认生效的 `provider / model`
+- `apply_mode`
+  - 当前固定为 `reload_runtime`
+
+Provider 设置当前语义固定为：
+
+- 作用域是 `remote-global`
+- provider identity 当前固定为 registry 里的内置枚举槽位，不支持 remote 侧动态 create/delete
+- desktop 当前的 provider 管理面固定通过：
+  - `list_providers`
+  - `update_provider`
+  - `set_active_provider`
+  - `reload_runtime`
+- `apiKey`、per-provider `model`、以及 `custom.apiBase` 都持久化到 remote 配置文件
+- 当前 active provider/model 也是 `remote-global`
+- 保存配置不等于立即切换当前运行态
+- 当前生效方式固定为：
+  - 先 `update_provider` / `set_active_provider`
+  - 再显式 `reload_runtime`
+- 如果当前有进行中的 turn，`reload_runtime` 会返回 `error.code = runtime_reload_busy`
+- `error` 现在还可能带 `fields`，用于 provider 设置页的字段级校验提示
+- `apiKey` 不会明文回传；列表和状态快照只返回 `api_key_set + api_key_preview`
+- 需要清空 `apiKey` 时，desktop 应传 `clear_api_key = true`
+
+`provider_state` / `provider_list` 当前每个 provider 条目固定包含：
+
+- `provider`
+- `display_name`
+- `backend`
+- `builtin`
+- `editable`
+- `deletable`
+- `api_key_set`
+- `api_key_preview`
+- `saved_model`
+- `api_base`
+- `api_base_editable`
+- `default_api_base`
+- `source`
 
 ---
 

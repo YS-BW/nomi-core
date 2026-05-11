@@ -75,3 +75,14 @@ class RemoteHub:
                 await client.send_json(payload)
             except Exception:
                 continue
+
+    async def broadcast_all(self, payload: dict[str, Any]) -> None:
+        """向当前所有已连接客户端广播事件。"""
+        targets: list[RemoteClient] = []
+        async with self._lock:
+            targets = list(self._clients.values())
+        for client in targets:
+            try:
+                await client.send_json(payload)
+            except Exception:
+                continue

@@ -18,12 +18,19 @@ from nomi.remote.bridge import RemoteBridge
 from nomi.remote.hub import RemoteClient, RemoteHub
 from nomi.remote.schemas import RemoteCommand
 from nomi.runtime import NomiRuntime
+from nomi.runtime.errors import RuntimeConfigError
 from nomi.runtime.protocol import (
+    build_active_provider_changed_event,
     build_error_event,
     build_history_snapshot_event,
     build_interrupt_result_event,
+    build_provider_list_event,
+    build_provider_settings_updated_event,
+    build_provider_state_snapshot_event,
+    build_provider_updated_event,
     build_ready_event,
     build_resource_action_result_event,
+    build_runtime_reloaded_event,
     build_session_bound_event,
     build_session_created_event,
     build_session_deleted_event,
@@ -124,6 +131,7 @@ class RemoteServer:
                     host=self._config.remote.host,
                     port=self._config.remote.port,
                     provider_catalog=build_provider_catalog(),
+                    provider_state=self._runtime.get_provider_state_snapshot(),
                 )
             )
             async for message in websocket:
@@ -225,6 +233,20 @@ class RemoteServer:
                 snapshot = await self._runtime.get_status_snapshot(session_id)
                 await client.send_json(build_status_result_event(snapshot, session_id=session_id))
                 return
+            if command.type == "get_provider_state":
+                await client.send_json(
+                    build_provider_state_snapshot_event(
+                        provider_state=self._runtime.get_provider_state_snapshot(),
+                    )
+                )
+                return
+            if command.type == "list_providers":
+                await client.send_json(
+                    build_provider_list_event(
+                        provider_list=self._runtime.list_providers(),
+                    )
+                )
+                return
             if command.type == "list_sessions":
                 result = self._runtime.list_sessions(
                     page_token=command.page_token,
@@ -264,6 +286,62 @@ class RemoteServer:
                     build_session_deleted_event(
                         session_id=result["session_id"],
                         deleted=bool(result["deleted"]),
+                    )
+                )
+                return
+            if command.type == "set_provider_settings":
+                provider = self._require_text(command.provider, "provider")
+                result = self._runtime.set_provider_settings(
+                    provider,
+                    api_key=command.api_key if self._field_is_present(command, "api_key") else Ellipsis,
+                    api_base=command.api_base if self._field_is_present(command, "api_base") else Ellipsis,
+                    model=command.model if self._field_is_present(command, "model") else Ellipsis,
+                )
+                await self._hub.broadcast_all(
+                    build_provider_settings_updated_event(
+                        provider=result["provider"],
+                        settings=result["settings"],
+                        requires_runtime_reload=bool(result["requires_runtime_reload"]),
+                    )
+                )
+                return
+            if command.type == "update_provider":
+                provider = self._require_text(command.provider, "provider")
+                result = self._runtime.update_provider(
+                    provider,
+                    api_key=command.api_key if self._field_is_present(command, "api_key") else Ellipsis,
+                    api_base=command.api_base if self._field_is_present(command, "api_base") else Ellipsis,
+                    model=command.model if self._field_is_present(command, "model") else Ellipsis,
+                    clear_api_key=(
+                        command.clear_api_key
+                        if self._field_is_present(command, "clear_api_key")
+                        else Ellipsis
+                    ),
+                )
+                await self._hub.broadcast_all(
+                    build_provider_updated_event(
+                        provider=result["provider"],
+                        settings=result["settings"],
+                        requires_runtime_reload=bool(result["requires_runtime_reload"]),
+                    )
+                )
+                return
+            if command.type == "set_active_provider":
+                provider = self._require_text(command.provider, "provider")
+                result = self._runtime.set_active_provider(provider, model=command.model)
+                await self._hub.broadcast_all(
+                    build_active_provider_changed_event(
+                        active=result["active"],
+                        requires_runtime_reload=bool(result["requires_runtime_reload"]),
+                    )
+                )
+                return
+            if command.type == "reload_runtime":
+                result = await self._runtime.reload_runtime()
+                await self._hub.broadcast_all(
+                    build_runtime_reloaded_event(
+                        active=result["active"],
+                        provider_state=result["provider_state"],
                     )
                 )
                 return
@@ -518,6 +596,15 @@ class RemoteServer:
                     command=command.type,
                 )
             )
+        except RuntimeConfigError as exc:
+            await client.send_json(
+                build_error_event(
+                    str(exc),
+                    code=getattr(exc, "code", "runtime_config_error"),
+                    command=command.type,
+                    fields=getattr(exc, "fields", None),
+                )
+            )
         except Exception as exc:
             await client.send_json(
                 build_error_event(
@@ -654,3 +741,8 @@ class RemoteServer:
         if value is None:
             raise ValueError(f"{field_name} is required")
         return int(value)
+
+    @staticmethod
+    def _field_is_present(command: RemoteCommand, field_name: str) -> bool:
+        """判断一条命令是否显式传入了某个字段。"""
+        return field_name in command.model_fields_set

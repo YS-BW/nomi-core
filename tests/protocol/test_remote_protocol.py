@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from nomi_protocol.remote import (
     PROTOCOL_VERSION,
     REMOTE_COMMAND_TYPES,
@@ -11,6 +10,7 @@ from nomi_protocol.remote import (
     RemoteCommand,
     load_remote_protocol_spec,
 )
+
 
 def test_remote_protocol_spec_matches_python_contract() -> None:
     """共享协议 spec 应与 Python 薄封装保持一致。"""
