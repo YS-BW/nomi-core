@@ -24,6 +24,7 @@ from nomi.bus.events import OutboundMessage
 from nomi.channel.base import BaseChannel
 from nomi.config.paths import get_media_dir, get_runtime_subdir
 from nomi.runtime.protocol import default_session_id
+from nomi.session.errors import SessionNotFoundError
 from .streaming import (
     WEIXIN_TYPING_STATUS_START,
     WEIXIN_TYPING_STATUS_STOP,
@@ -682,7 +683,10 @@ class WeixinChannel(BaseChannel):
             for key in self._completed_streams
             if not key.startswith(f"{session_id}:") and key != session_id
         }
-        self.runtime.interrupt_session(session_id, "user_interrupt")
+        try:
+            self.runtime.interrupt_session(session_id, "user_interrupt")
+        except SessionNotFoundError:
+            return 0
         return self.runtime.drop_pending_session_messages(session_id)
 
     @staticmethod

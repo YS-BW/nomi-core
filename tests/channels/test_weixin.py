@@ -15,6 +15,7 @@ from nomi.bus.events import OutboundMessage
 from nomi.bus.queue import MessageBus
 from nomi.channel.adapters.weixin.channel import WeixinChannel
 from nomi.config.schema import Config
+from nomi.session.errors import SessionNotFoundError
 
 
 class _FakeRuntime:
@@ -160,6 +161,30 @@ async def test_weixin_process_message_respects_allow_from(tmp_path: Path) -> Non
     )
 
     assert channel.bus.inbound_size == 0
+
+
+@pytest.mark.asyncio
+async def test_weixin_process_message_skips_missing_session_interrupt(tmp_path: Path) -> None:
+    channel = _make_channel(tmp_path)
+    channel.runtime.interrupt_session.side_effect = SessionNotFoundError(
+        "session not found",
+        session_id="weixin:wx-user",
+    )
+
+    await channel._process_message(
+        {
+            "message_type": 1,
+            "message_id": "m2a",
+            "from_user_id": "wx-user",
+            "context_token": "ctx-2a",
+            "item_list": [
+                {"type": 1, "text_item": {"text": "hello"}},
+            ],
+        }
+    )
+
+    inbound = await asyncio.wait_for(channel.bus.consume_inbound(), timeout=1.0)
+    assert inbound.session_key == "weixin:wx-user"
 
 
 @pytest.mark.asyncio
