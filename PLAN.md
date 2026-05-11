@@ -246,7 +246,7 @@ utils         = 低层通用小工具
 - 当前已完成一轮 remote session 管理协议与 core 收口：
   - `nomi-protocol` 已新增 `create_session / delete_session / session_created / session_deleted`
   - `list_sessions` 已扩成全 remote 视图，返回分页字段和完整 session 摘要
-  - `load_history / get_status / send_message / interrupt_turn` 对缺失 session 已统一返回 `session_not_found`
+  - `bind_session / load_history / get_status / send_message / interrupt_turn` 对缺失 session 已统一返回 `session_not_found`
   - 下一步只剩 desktop 侧会话管理 UI 和交互接入
   - 多工具并列时，模型也能稳定选对 `task_create_after / at / daily / every`
   - 当前波动主要只在 `instruction` 措辞压缩，不在新增字段本身
