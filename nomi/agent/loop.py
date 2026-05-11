@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from contextlib import nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, Awaitable, Callable
 

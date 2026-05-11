@@ -331,7 +331,7 @@ def test_sanitize_messages_keeps_other_provider_error_placeholder_unchanged() ->
 def test_normalize_response_keeps_none_for_non_tool_call_response() -> None:
     """普通非工具调用响应缺少 reasoning_content 时继续保持 None。"""
     with patch("nomi.providers.backends.openai_compat.AsyncOpenAI"):
-        provider = OpenAICompatProvider(spec=find_by_name("openai"))
+        OpenAICompatProvider(spec=find_by_name("openai"))
 
     result = LLMResponse(content="hello", tool_calls=[], reasoning_content=None)
 

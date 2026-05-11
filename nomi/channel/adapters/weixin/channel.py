@@ -26,7 +26,6 @@ from nomi.config.paths import get_media_dir, get_runtime_subdir
 from nomi.runtime.protocol import default_session_id
 from nomi.session.errors import SessionNotFoundError
 from .streaming import (
-    WEIXIN_TYPING_STATUS_START,
     WEIXIN_TYPING_STATUS_STOP,
     WeixinStreamSender,
 )

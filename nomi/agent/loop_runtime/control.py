@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from nomi.bus.events import InboundMessage, OutboundMessage
+from nomi.bus.events import InboundMessage
 from nomi.runtime.models import InterruptResult
 
 from .state import LoopRuntimeState, SessionInterruptState

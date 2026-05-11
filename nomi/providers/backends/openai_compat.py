@@ -24,7 +24,6 @@ from nomi.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from nomi.providers.openai_compat.common import (
     DEFAULT_OPENROUTER_HEADERS,
     extract_usage,
-    is_direct_openai_base,
     maybe_mapping,
     uses_openrouter_attribution,
 )
