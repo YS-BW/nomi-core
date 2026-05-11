@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from nomi.config.instance import instance_context_scope
 from nomi.config.loader import get_config_path
 from nomi.config.paths import (
     get_cli_history_path,
@@ -33,8 +34,9 @@ def test_media_dir_supports_channel_namespace(monkeypatch, tmp_path: Path) -> No
     assert get_media_dir() == config_file.parent / "media"
     assert get_media_dir("telegram") == config_file.parent / "media" / "telegram"
 
-def test_shared_paths_remain_global() -> None:
-    assert get_cli_history_path() == Path.home() / ".nomi" / "history" / "cli_history"
+def test_cli_history_path_is_instance_scoped(tmp_path: Path) -> None:
+    with instance_context_scope(instance_root=tmp_path / "instance-c"):
+        assert get_cli_history_path() == (tmp_path / "instance-c" / "history" / "cli_history")
 
 
 def test_workspace_path_is_explicitly_resolved() -> None:

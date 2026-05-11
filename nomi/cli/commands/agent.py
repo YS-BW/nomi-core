@@ -9,7 +9,11 @@ from loguru import logger
 
 from nomi.cli.interactive import run_interactive_loop
 from nomi.cli.render import print_agent_response, print_cli_progress_line
-from nomi.cli.support.config import load_runtime_config
+from nomi.cli.support.config import (
+    instance_option,
+    instance_root_option,
+    load_runtime_config,
+)
 from nomi.cli.support.runtime_factory import make_runtime
 from nomi.cli.stream import StreamRenderer
 from nomi.utils.restart import (
@@ -36,6 +40,8 @@ def register_agent_command(app: typer.Typer) -> None:
         session_id: str = typer.Option("cli:direct", "--session", "-s", help="Session ID"),
         workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
         config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+        instance: str | None = instance_option(),
+        instance_root: str | None = instance_root_option(),
         markdown: bool = typer.Option(True, "--markdown/--no-markdown", help="Render assistant output as Markdown"),
         logs: bool = typer.Option(False, "--logs/--no-logs", help="Show nomi runtime logs during chat"),
     ) -> None:
@@ -52,7 +58,12 @@ def register_agent_command(app: typer.Typer) -> None:
         返回:
             无返回值。
         """
-        loaded_config = load_runtime_config(config, workspace)
+        loaded_config = load_runtime_config(
+            config,
+            workspace,
+            instance=instance,
+            instance_root=instance_root,
+        )
         sync_workspace_templates(loaded_config.workspace_path)
 
         if logs:

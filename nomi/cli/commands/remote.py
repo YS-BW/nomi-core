@@ -6,6 +6,7 @@ import typer
 from loguru import logger
 
 from nomi.cli.support.config import load_runtime_config
+from nomi.cli.support.config import instance_option, instance_root_option
 from nomi.cli.support.runtime_factory import make_runtime
 from nomi.remote.service.usecases import (
     restart_remote_service,
@@ -34,9 +35,17 @@ def register_remote_command(app: typer.Typer) -> None:
     def run(
         workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
         config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+        instance: str | None = instance_option(),
+        instance_root: str | None = instance_root_option(),
     ) -> None:
         """以前台方式运行 remote service。"""
-        loaded_config = load_runtime_config(config, workspace, silent=True)
+        loaded_config = load_runtime_config(
+            config,
+            workspace,
+            instance=instance,
+            instance_root=instance_root,
+            silent=True,
+        )
         sync_workspace_templates(loaded_config.workspace_path, silent=True)
         logger.enable("nomi")
         run_remote_service_foreground(loaded_config, make_runtime)
@@ -45,9 +54,17 @@ def register_remote_command(app: typer.Typer) -> None:
     def serve_internal(
         workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
         config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+        instance: str | None = instance_option(),
+        instance_root: str | None = instance_root_option(),
     ) -> None:
         """后台 service 专用入口。"""
-        loaded_config = load_runtime_config(config, workspace, silent=True)
+        loaded_config = load_runtime_config(
+            config,
+            workspace,
+            instance=instance,
+            instance_root=instance_root,
+            silent=True,
+        )
         sync_workspace_templates(loaded_config.workspace_path, silent=True)
         logger.enable("nomi")
         serve_remote_internal(loaded_config, make_runtime)
@@ -56,28 +73,60 @@ def register_remote_command(app: typer.Typer) -> None:
     def start(
         workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
         config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+        instance: str | None = instance_option(),
+        instance_root: str | None = instance_root_option(),
     ) -> None:
         """后台启动 remote service。"""
-        loaded_config = load_runtime_config(config, workspace, silent=True)
-        start_remote_service(config, workspace, loaded_config)
+        loaded_config = load_runtime_config(
+            config,
+            workspace,
+            instance=instance,
+            instance_root=instance_root,
+            silent=True,
+        )
+        start_remote_service(config, workspace, loaded_config, instance=instance, instance_root=instance_root)
 
     @remote_app.command("log")
-    def log() -> None:
+    def log(
+        instance: str | None = instance_option(),
+        instance_root: str | None = instance_root_option(),
+        config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+    ) -> None:
         """实时展示后台 remote service 日志。"""
+        load_runtime_config(config, None, instance=instance, instance_root=instance_root, silent=True)
         tail_remote_service_log()
 
     @remote_app.command("stop")
-    def stop() -> None:
+    def stop(
+        instance: str | None = instance_option(),
+        instance_root: str | None = instance_root_option(),
+        config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+    ) -> None:
         """停止后台 remote service。"""
-        stop_remote_service()
+        loaded_config = load_runtime_config(config, None, instance=instance, instance_root=instance_root, silent=True)
+        stop_remote_service(loaded_config)
 
     @remote_app.command("restart")
     def restart(
         workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
         config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+        instance: str | None = instance_option(),
+        instance_root: str | None = instance_root_option(),
     ) -> None:
         """重启后台 remote service。"""
-        loaded_config = load_runtime_config(config, workspace, silent=True)
-        restart_remote_service(config, workspace, loaded_config)
+        loaded_config = load_runtime_config(
+            config,
+            workspace,
+            instance=instance,
+            instance_root=instance_root,
+            silent=True,
+        )
+        restart_remote_service(
+            config,
+            workspace,
+            loaded_config,
+            instance=instance,
+            instance_root=instance_root,
+        )
 
     app.add_typer(remote_app, name="remote")

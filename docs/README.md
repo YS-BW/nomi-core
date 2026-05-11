@@ -31,6 +31,7 @@
 | 文档 | 说明 |
 |---|---|
 | [CLI.md](./CLI.md) | 终端入口、交互循环、快捷键、slash 命令 |
+| [INSTANCE.md](./INSTANCE.md) | 实例模型、实例命令组、实例级路径与 service 管理 |
 | [WEIXIN.md](./WEIXIN.md) | 微信 channel 的登录、运行、消息收发和分段规则 |
 | [REMOTE.md](./REMOTE.md) | 远程 desktop shell 服务、共享协议契约、桌面端接入方式 |
 | [WORKSPACE.md](./WORKSPACE.md) | `~/.nomi` 和工作区目录的文件结构 |

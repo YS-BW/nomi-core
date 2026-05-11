@@ -44,9 +44,22 @@ def serve_channel_internal(loaded_config, runtime_factory) -> None:
     asyncio.run(run_active_channel_foreground(loaded_config, runtime_factory))
 
 
-def start_channel_service(config_arg: str | None, workspace: str | None, loaded_config) -> None:
+def start_channel_service(
+    config_arg: str | None,
+    workspace: str | None,
+    loaded_config,
+    *,
+    instance: str | None = None,
+    instance_root: str | None = None,
+) -> None:
     """后台启动 channel service。"""
-    start_background_service(config_arg, workspace, loaded_config)
+    start_background_service(
+        config_arg,
+        workspace,
+        loaded_config,
+        instance=instance,
+        instance_root=instance_root,
+    )
 
 
 def stop_channel_service(config=None) -> None:
@@ -54,9 +67,22 @@ def stop_channel_service(config=None) -> None:
     stop_background_service(config)
 
 
-def restart_channel_service(config_arg: str | None, workspace: str | None, loaded_config) -> None:
+def restart_channel_service(
+    config_arg: str | None,
+    workspace: str | None,
+    loaded_config,
+    *,
+    instance: str | None = None,
+    instance_root: str | None = None,
+) -> None:
     """重启后台 channel service。"""
-    restart_background_service(config_arg, workspace, loaded_config)
+    restart_background_service(
+        config_arg,
+        workspace,
+        loaded_config,
+        instance=instance,
+        instance_root=instance_root,
+    )
 
 
 def tail_channel_service_log() -> None:

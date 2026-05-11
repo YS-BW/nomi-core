@@ -8,6 +8,7 @@ from rich.table import Table
 from nomi import __logo__
 from nomi.cli.render import console
 from nomi.cli.support.status import build_status_rows
+from nomi.cli.support.config import instance_option, instance_root_option
 
 
 def register_status_command(app: typer.Typer) -> None:
@@ -21,7 +22,11 @@ def register_status_command(app: typer.Typer) -> None:
     """
 
     @app.command()
-    def status() -> None:
+    def status(
+        config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+        instance: str | None = instance_option(),
+        instance_root: str | None = instance_root_option(),
+    ) -> None:
         """显示 Nomi 当前状态。
 
         返回:
@@ -32,6 +37,6 @@ def register_status_command(app: typer.Typer) -> None:
         table.add_column("字段", style="cyan", no_wrap=True)
         table.add_column("当前值", style="white")
         table.add_column("说明", style="white")
-        for row in build_status_rows():
+        for row in build_status_rows(config=config, instance=instance, instance_root=instance_root):
             table.add_row(row.key, row.value, row.description)
         console.print(table)

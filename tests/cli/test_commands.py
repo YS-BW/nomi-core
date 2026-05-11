@@ -132,6 +132,8 @@ def test_onboard_help_shows_workspace_and_config_options() -> None:
     stripped_output = _strip_ansi(result.stdout)
     assert "--workspace" in stripped_output
     assert "--config" in stripped_output
+    assert "--instance" in stripped_output
+    assert "--instance-root" in stripped_output
     assert "--wizard" in stripped_output
 
 
@@ -142,6 +144,7 @@ def test_root_help_shows_only_current_commands() -> None:
     assert result.exit_code == 0
     stripped_output = _strip_ansi(result.stdout)
     assert "onboard" in stripped_output
+    assert "instance" in stripped_output
     assert "agent" in stripped_output
     assert "channel" in stripped_output
     assert "remote" in stripped_output
@@ -296,6 +299,8 @@ def test_agent_help_shows_workspace_and_config_options() -> None:
     stripped_output = _strip_ansi(result.stdout)
     assert "--workspace" in stripped_output
     assert "--config" in stripped_output
+    assert "--instance" in stripped_output
+    assert "--instance-root" in stripped_output
 
 
 def test_agent_uses_default_config_when_no_workspace_or_config_flags(mock_agent_runtime) -> None:
@@ -304,6 +309,10 @@ def test_agent_uses_default_config_when_no_workspace_or_config_flags(mock_agent_
 
     assert result.exit_code == 0
     assert mock_agent_runtime["load_runtime_config"].call_args.args == (None, None)
+    assert mock_agent_runtime["load_runtime_config"].call_args.kwargs == {
+        "instance": None,
+        "instance_root": None,
+    }
     assert mock_agent_runtime["sync_templates"].call_args.args == (
         mock_agent_runtime["config"].workspace_path,
     )
@@ -347,6 +356,10 @@ def test_agent_uses_explicit_config_path(mock_agent_runtime, tmp_path: Path) -> 
 
     assert result.exit_code == 0
     assert mock_agent_runtime["load_runtime_config"].call_args.args == (str(config_path), None)
+    assert mock_agent_runtime["load_runtime_config"].call_args.kwargs == {
+        "instance": None,
+        "instance_root": None,
+    }
 
 
 def test_agent_config_sets_active_path(monkeypatch, tmp_path: Path) -> None:
@@ -382,6 +395,10 @@ def test_agent_overrides_workspace_path(mock_agent_runtime) -> None:
 
     assert result.exit_code == 0
     assert mock_agent_runtime["load_runtime_config"].call_args.args == (None, str(workspace_path))
+    assert mock_agent_runtime["load_runtime_config"].call_args.kwargs == {
+        "instance": None,
+        "instance_root": None,
+    }
     assert mock_agent_runtime["sync_templates"].call_args.args == (
         mock_agent_runtime["config"].workspace_path,
     )
@@ -406,9 +423,25 @@ def test_agent_workspace_override_wins_over_config_workspace(
         str(config_path),
         str(workspace_path),
     )
+    assert mock_agent_runtime["load_runtime_config"].call_args.kwargs == {
+        "instance": None,
+        "instance_root": None,
+    }
     assert mock_agent_runtime["sync_templates"].call_args.args == (
         mock_agent_runtime["config"].workspace_path,
     )
+
+
+def test_agent_supports_instance_flags(mock_agent_runtime) -> None:
+    """agent 应把实例参数透传到运行时配置解析。"""
+    result = runner.invoke(app, ["agent", "-m", "hello", "--instance", "team-a"])
+
+    assert result.exit_code == 0
+    assert mock_agent_runtime["load_runtime_config"].call_args.args == (None, None)
+    assert mock_agent_runtime["load_runtime_config"].call_args.kwargs == {
+        "instance": "team-a",
+        "instance_root": None,
+    }
 
 
 def test_agent_rejects_removed_top_level_config_keys(tmp_path: Path) -> None:
@@ -464,6 +497,16 @@ def test_status_reports_basic_runtime_state(monkeypatch, tmp_path: Path) -> None
     assert "Channel Log" in stripped
 
 
+def test_status_help_shows_instance_options() -> None:
+    """status 帮助页应暴露实例参数。"""
+    result = runner.invoke(app, ["status", "--help"])
+
+    assert result.exit_code == 0
+    stripped = _strip_ansi(result.stdout)
+    assert "--instance" in stripped
+    assert "--instance-root" in stripped
+
+
 def test_channel_login_invokes_weixin_login(monkeypatch) -> None:
     """channel login 应调用当前微信登录链。"""
     called: dict[str, object] = {}
@@ -515,6 +558,20 @@ def test_channel_without_subcommand_shows_help() -> None:
     assert "log" in stripped
     assert "restart" in stripped
     assert "stop" in stripped
+
+
+def test_instance_without_subcommand_shows_help() -> None:
+    """instance 裸调用时应直接展示帮助。"""
+    result = runner.invoke(app, ["instance"])
+
+    assert result.exit_code == 0
+    stripped = _strip_ansi(result.stdout)
+    assert "Manage nomi instances" in stripped
+    assert "list" in stripped
+    assert "create" in stripped
+    assert "inspect" in stripped
+    assert "remove" in stripped
+    assert "services" in stripped
 
 
 def test_channel_run_starts_channel_manager_with_logs(monkeypatch, tmp_path) -> None:
@@ -742,6 +799,31 @@ def test_channel_start_spawns_background_process(monkeypatch, tmp_path: Path) ->
     assert "日志文件" in result.stdout
 
 
+def test_channel_start_passes_instance_flag_to_service(monkeypatch, tmp_path: Path) -> None:
+    """channel start 应把实例参数透传给后台 service。"""
+    loaded_config = Config()
+    loaded_config.channel.kind = "weixin"
+    weixin_dir = tmp_path / "weixin"
+    weixin_dir.mkdir(parents=True)
+    (weixin_dir / "account.json").write_text("{}", encoding="utf-8")
+    loaded_config.channel.weixin.state_dir = str(weixin_dir)
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr("nomi.cli.commands.channel.load_runtime_config", lambda *_args, **_kwargs: loaded_config)
+    monkeypatch.setattr(
+        "nomi.cli.commands.channel.start_channel_service",
+        lambda config, workspace, loaded, **kwargs: captured.update(
+            {"config": config, "workspace": workspace, "loaded": loaded, **kwargs}
+        ),
+    )
+
+    result = runner.invoke(app, ["channel", "start", "--instance", "team-a"])
+
+    assert result.exit_code == 0
+    assert captured["instance"] == "team-a"
+    assert captured["instance_root"] is None
+
+
 def test_channel_start_fails_when_child_exits_before_register(monkeypatch, tmp_path: Path) -> None:
     """channel start 只有在子进程完成注册后才应回报成功。"""
     loaded_config = Config()
@@ -922,7 +1004,7 @@ def test_channel_restart_restarts_running_process(monkeypatch) -> None:
     monkeypatch.setattr("nomi.cli.commands.channel.load_runtime_config", lambda *_args, **_kwargs: loaded_config)
     monkeypatch.setattr(
         "nomi.cli.commands.channel.restart_channel_service",
-        lambda config, workspace, loaded: calls.append(("restart", config, workspace)),
+        lambda config, workspace, loaded, **_kwargs: calls.append(("restart", config, workspace)),
     )
 
     result = runner.invoke(app, ["channel", "restart"])
@@ -940,7 +1022,7 @@ def test_channel_restart_starts_when_stopped(monkeypatch) -> None:
     monkeypatch.setattr("nomi.cli.commands.channel.load_runtime_config", lambda *_args, **_kwargs: loaded_config)
     monkeypatch.setattr(
         "nomi.cli.commands.channel.restart_channel_service",
-        lambda config, workspace, loaded: calls.append(("restart", config, workspace)),
+        lambda config, workspace, loaded, **_kwargs: calls.append(("restart", config, workspace)),
     )
 
     result = runner.invoke(app, ["channel", "restart"])

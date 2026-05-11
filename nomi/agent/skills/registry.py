@@ -9,7 +9,7 @@ from typing import Any
 from nomi.agent.skills.manager import SkillManager
 from nomi.agent.skills.models import SkillSpec
 from nomi.agent.skills.parser import parse_skill_metadata
-from nomi.config.paths import GLOBAL_SKILLS_DIR
+from nomi.config.paths import get_skills_dir
 
 
 class SkillRegistry:
@@ -28,7 +28,7 @@ class SkillRegistry:
         返回:
             无返回值。
         """
-        self.root = (root or GLOBAL_SKILLS_DIR).expanduser()
+        self.root = (root or get_skills_dir()).expanduser()
         self.manager = manager or SkillManager(root=self.root)
 
     def scan(self) -> list[SkillSpec]:

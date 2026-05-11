@@ -29,7 +29,7 @@ from nomi.agent.execution.processor import DirectProcessResult, TurnProcessor
 from nomi.bus.events import InboundMessage, OutboundMessage
 from nomi.bus.queue import MessageBus
 from nomi.command import CommandContext, CommandRouter, register_builtin_commands
-from nomi.config.paths import GLOBAL_SKILLS_DIR, get_cron_store_path, get_task_store_path
+from nomi.config.paths import get_cron_store_path, get_data_dir, get_skills_dir, get_task_store_path
 from nomi.config.schema import AgentDefaults
 from nomi.cron import CronJob, CronService
 from nomi.providers.base import LLMProvider
@@ -152,7 +152,7 @@ class AgentLoop:
             skill_registry=self.skill_registry,
             timezone=timezone,
         )
-        self.sessions = session_manager or SessionManager(workspace)
+        self.sessions = session_manager or SessionManager(get_data_dir())
         self.turn_journals = TurnJournalStore(workspace)
         self.tools = ToolRegistry()
         self.runner = AgentRunner(provider)
@@ -204,7 +204,7 @@ class AgentLoop:
             provider=provider,
             model=self.model,
             default_timezone=default_timezone,
-            extra_allowed_dirs=[GLOBAL_SKILLS_DIR],
+            extra_allowed_dirs=[get_skills_dir()],
             sessions=self.sessions,
         )
         self.commands = CommandRouter()

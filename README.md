@@ -15,6 +15,7 @@ Nomi 可以先把它理解成一个“住在终端里的 AI 搭子” 🍌
 
 - 一个以终端为主入口的 AI 助手
 - 一个统一的进程内 runtime
+- 一个真实的多实例运行模型
 - 一个真实可运行的 Agent 主链路
 - 一个单入口外部 channel 子系统
 - 一套可持续积累的记忆、工具、skills 和 cron 能力
@@ -103,9 +104,17 @@ nomi onboard
 
 `onboard` 会：
 
-- 创建 `~/.nomi/config.json`
-- 创建工作区目录
+- 默认初始化 `default -> ~/.nomi`
+- 创建实例级 `config.json`
+- 创建实例级工作区目录
 - 同步工作区模板文件
+
+如果你要创建第二实例，现在应该直接走：
+
+```bash
+nomi instance create team-a
+nomi onboard --instance team-a
+```
 
 命令入口在 [nomi/cli/commands/onboard.py](./nomi/cli/commands/onboard.py#L16-L125)。
 
@@ -183,6 +192,11 @@ nomi agent -m "帮我看看当前目录结构"
 
 Nomi 当前只有一个外部 channel 入口：`nomi channel`。  
 底层当前只实现了 `weixin`。
+
+`channel` / `remote` / `status` / `onboard` 现在都支持：
+
+- `--instance`
+- `--instance-root`
 
 ### 启用微信
 

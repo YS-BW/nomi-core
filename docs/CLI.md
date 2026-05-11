@@ -16,8 +16,10 @@ CLI 是 Nomi 当前最主要、也是你最常接触到的入口 ⌨️
 当前 `nomi --help` 可见的根命令主要有：
 
 - `nomi onboard`
+- `nomi instance`
 - `nomi agent`
 - `nomi channel`
+- `nomi remote`
 - `nomi status`
 
 根入口定义在 [nomi/cli/app.py](../nomi/cli/app.py#L25-L87)。
@@ -82,6 +84,8 @@ nomi agent -m "帮我看一下这个目录"
 | `-s, --session` | 会话 key，默认 `cli:direct` |
 | `-w, --workspace` | 覆盖工作区路径 |
 | `-c, --config` | 覆盖配置文件路径 |
+| `--instance` | 按实例名解析当前实例 |
+| `--instance-root` | 直接指定实例 root |
 | `--markdown / --no-markdown` | 是否按 Markdown 渲染 |
 | `--logs / --no-logs` | 是否显示 runtime 日志 |
 
@@ -194,18 +198,56 @@ CLI 里的 slash 命令不是交给模型，而是在进入模型前就被路由
 
 这个命令只给后台 service 自己拉起子进程时使用，不对用户暴露。
 
+`login / run / start / log / stop / restart` 现在也都支持：
+
+- `--instance`
+- `--instance-root`
+- `--config`
+
+## `nomi remote`
+
+`remote` 是桌面壳联调和后台 remote server 的 CLI 入口。
+
+当前子命令：
+
+- `nomi remote run`
+- `nomi remote start`
+- `nomi remote log`
+- `nomi remote stop`
+- `nomi remote restart`
+
+这些命令同样支持实例参数，并按实例 root 读写日志、pid 和状态文件。
+
+---
+
+## `nomi instance`
+
+`instance` 是真正的实例管理入口。
+
+当前子命令：
+
+- `nomi instance list`
+- `nomi instance create <name>`
+- `nomi instance inspect <name>`
+- `nomi instance remove <name>`
+- `nomi instance services`
+
+实现见 [nomi/cli/commands/instance.py](../nomi/cli/commands/instance.py#L1-L96)。
+
 ---
 
 ## `nomi onboard`
 
-`onboard` 负责初始化配置和工作区。
+`onboard` 现在是实例初始化入口。
 
 当前行为：
 
-- 配置不存在时创建默认配置
+- 默认初始化 `default -> ~/.nomi`
+- 显式 `--instance` 或 `--instance-root` 时初始化对应实例
+- 配置不存在时创建实例级配置
 - 配置存在时允许覆盖或刷新
 - `--wizard` 时进入交互式向导
-- 最后同步工作区模板
+- 最后同步该实例下 workspace 模板
 
 对应代码：[nomi/cli/commands/onboard.py](../nomi/cli/commands/onboard.py#L16-L125)
 
@@ -217,6 +259,7 @@ CLI 里的 slash 命令不是交给模型，而是在进入模型前就被路由
 
 它会读取：
 
+- 当前 instance
 - 当前 config
 - 当前 workspace
 - 当前默认 provider/model/timezone

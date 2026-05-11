@@ -22,9 +22,22 @@ def serve_remote_internal(loaded_config, runtime_factory) -> None:
     run_foreground_service(loaded_config, runtime_factory)
 
 
-def start_remote_service(config_arg: str | None, workspace: str | None, loaded_config) -> None:
+def start_remote_service(
+    config_arg: str | None,
+    workspace: str | None,
+    loaded_config,
+    *,
+    instance: str | None = None,
+    instance_root: str | None = None,
+) -> None:
     """后台启动 remote service。"""
-    start_background_service(config_arg, workspace, loaded_config)
+    start_background_service(
+        config_arg,
+        workspace,
+        loaded_config,
+        instance=instance,
+        instance_root=instance_root,
+    )
 
 
 def stop_remote_service(config=None) -> None:
@@ -32,9 +45,22 @@ def stop_remote_service(config=None) -> None:
     stop_background_service(config)
 
 
-def restart_remote_service(config_arg: str | None, workspace: str | None, loaded_config) -> None:
+def restart_remote_service(
+    config_arg: str | None,
+    workspace: str | None,
+    loaded_config,
+    *,
+    instance: str | None = None,
+    instance_root: str | None = None,
+) -> None:
     """重启后台 remote service。"""
-    restart_background_service(config_arg, workspace, loaded_config)
+    restart_background_service(
+        config_arg,
+        workspace,
+        loaded_config,
+        instance=instance,
+        instance_root=instance_root,
+    )
 
 
 def tail_remote_service_log() -> None:

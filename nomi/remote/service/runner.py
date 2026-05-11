@@ -30,17 +30,34 @@ from nomi.remote.service.state import (
 )
 
 
-def build_service_command(config: str | None, workspace: str | None) -> list[str]:
+def build_service_command(
+    config: str | None,
+    workspace: str | None,
+    *,
+    instance: str | None = None,
+    instance_root: str | None = None,
+) -> list[str]:
     """构造后台 service 启动命令。"""
     command = [sys.executable, "-m", "nomi", "remote", "_serve_internal"]
     if config:
         command.extend(["--config", str(Path(config).expanduser().resolve())])
+    if instance:
+        command.extend(["--instance", instance])
+    if instance_root:
+        command.extend(["--instance-root", str(Path(instance_root).expanduser().resolve())])
     if workspace:
         command.extend(["--workspace", workspace])
     return command
 
 
-def start_background_service(config_arg: str | None, workspace: str | None, loaded_config) -> None:
+def start_background_service(
+    config_arg: str | None,
+    workspace: str | None,
+    loaded_config,
+    *,
+    instance: str | None = None,
+    instance_root: str | None = None,
+) -> None:
     """后台启动 remote service。"""
     state = get_service_state(loaded_config)
     if state.state == "running":
@@ -62,7 +79,12 @@ def start_background_service(config_arg: str | None, workspace: str | None, load
 
     with log_path.open("a", encoding="utf-8") as log_file:
         process = subprocess.Popen(
-            build_service_command(config_arg, workspace),
+            build_service_command(
+                config_arg,
+                workspace,
+                instance=instance,
+                instance_root=instance_root,
+            ),
             stdout=log_file,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
@@ -157,14 +179,27 @@ def run_foreground_service(loaded_config, runtime_factory) -> None:
     asyncio.run(run_remote_foreground(loaded_config, runtime_factory))
 
 
-def restart_background_service(config_arg: str | None, workspace: str | None, loaded_config) -> None:
+def restart_background_service(
+    config_arg: str | None,
+    workspace: str | None,
+    loaded_config,
+    *,
+    instance: str | None = None,
+    instance_root: str | None = None,
+) -> None:
     """重启后台 remote service；未运行时则直接启动。"""
     state = get_service_state(loaded_config)
     if state.state == "running":
         stop_background_service(loaded_config)
     elif state.state == "stale":
         cleanup_stale_service_files(state.pid_path, state.state_path)
-    start_background_service(config_arg, workspace, loaded_config)
+    start_background_service(
+        config_arg,
+        workspace,
+        loaded_config,
+        instance=instance,
+        instance_root=instance_root,
+    )
 
 
 def _ensure_remote_auth_token(loaded_config) -> str:

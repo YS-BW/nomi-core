@@ -13,7 +13,7 @@ from loguru import logger
 from nomi.agent.tools.base import Tool, tool_parameters
 from nomi.agent.tools.sandbox import wrap_command
 from nomi.agent.tools.schema import IntegerSchema, StringSchema, tool_parameters_schema
-from nomi.config.paths import GLOBAL_SKILLS_DIR, get_media_dir
+from nomi.config.paths import get_media_dir, get_skills_dir
 
 _IS_WINDOWS = sys.platform == "win32"
 
@@ -336,7 +336,7 @@ class ExecTool(Tool):
                     continue
 
                 media_path = get_media_dir().resolve()
-                allowed_paths = [media_path, GLOBAL_SKILLS_DIR.resolve(), *self.extra_allowed_dirs]
+                allowed_paths = [media_path, get_skills_dir().resolve(), *self.extra_allowed_dirs]
                 if (p.is_absolute()
                     and cwd_path not in p.parents
                     and p != cwd_path

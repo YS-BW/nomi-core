@@ -41,6 +41,21 @@ def get_logs_dir() -> Path:
     return get_runtime_subdir("logs")
 
 
+def get_history_dir() -> Path:
+    """返回实例级 history 目录。"""
+    return get_runtime_subdir("history")
+
+
+def get_skills_dir() -> Path:
+    """返回实例级 skills 目录。"""
+    return get_runtime_subdir("skills")
+
+
+def get_sessions_dir() -> Path:
+    """返回实例级 sessions 目录。"""
+    return get_runtime_subdir("sessions")
+
+
 def get_cron_dir(workspace: str | Path | None = None) -> Path:
     """返回 cron 数据目录。"""
     return ensure_dir(get_workspace_path(workspace) / "cron")
@@ -68,7 +83,7 @@ def get_skill_usage_log_path() -> Path:
 
 def get_workspace_path(workspace: str | None = None) -> Path:
     """解析并确保工作区目录存在。"""
-    workspace_path = Path(workspace).expanduser() if workspace else DEFAULT_WORKSPACE_DIR
+    workspace_path = Path(workspace).expanduser() if workspace else get_runtime_subdir("workspace")
     return ensure_dir(workspace_path)
 
 
@@ -80,4 +95,4 @@ def is_default_workspace(workspace: str | Path | None) -> bool:
 
 def get_cli_history_path() -> Path:
     """返回共享 CLI 历史文件路径。"""
-    return DEFAULT_HISTORY_PATH
+    return get_history_dir() / "cli_history"

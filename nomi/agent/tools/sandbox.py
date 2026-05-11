@@ -3,7 +3,7 @@
 import shlex
 from pathlib import Path
 
-from nomi.config.paths import get_media_dir
+from nomi.config.paths import get_media_dir, get_skills_dir
 
 
 def _bwrap(command: str, workspace: str, cwd: str) -> str:
@@ -19,6 +19,7 @@ def _bwrap(command: str, workspace: str, cwd: str) -> str:
     """
     ws = Path(workspace).resolve()
     media = get_media_dir().resolve()
+    skills = get_skills_dir().resolve()
 
     try:
         sandbox_cwd = str(ws / Path(cwd).resolve().relative_to(ws))
@@ -47,6 +48,7 @@ def _bwrap(command: str, workspace: str, cwd: str) -> str:
         "--dir", str(ws),                 # 重新建挂载点，确保后续 bind 到同一路径。
         "--bind", str(ws), str(ws),
         "--ro-bind-try", str(media), str(media),  # 媒体目录保留只读，便于命令读取上传附件。
+        "--ro-bind-try", str(skills), str(skills),  # skills 目录保留只读，便于读取实例级 skill。
         "--chdir", sandbox_cwd,
         "--", "sh", "-c", command,
     ]

@@ -222,6 +222,7 @@ utils         = 低层通用小工具
 从现在开始，后续优先级固定为：
 
 - `P0`：模块七/八后的缺陷修复和文档同步
+- `P0`：instance 模型收口与实例级 service 管理
 - `P1`：系统级调度与 `heartbeat`
 - `P1.5`：remote 正式 desktop shell 产品化
 
@@ -238,6 +239,16 @@ utils         = 低层通用小工具
 - `remote / desktop` 当前共享协议已经拆到独立 `nomi-protocol` 仓，core 和 desktop 通过外部依赖消费
 - 当前已确认一个 desktop / channel 任务投递限制：
   - desktop 侧创建任务时，当前仍按 `desktop:{clientId}` session 写入任务目标
+- instance 模型当前已落到真实代码：
+  - `instance root` 已成为配置与运行态路径的唯一事实源
+  - 默认实例固定为 `default -> ~/.nomi`
+  - `agent / channel / remote / status / onboard` 已接入 `--instance / --instance-root`
+  - `nomi instance list/create/inspect/remove/services` 已上线
+  - `sessions / skills / history / logs / media` 已切到实例级路径
+  - `channel` / `remote` 后台 service 子进程已透传实例参数
+  - 仍需继续关注：
+    - 文档里剩余旧 `~/.nomi/workspace/sessions` 叙述是否完全清理
+    - 实例级 service 汇总是否还需要更细字段
   - channel service 的 `CronService` 启动后只在本进程内持有已加载 job，不会自动热重载后续由 remote / desktop 新建的任务
   - 因此“在 desktop 创建任务，然后让 channel 默认收到提醒”目前不成立，属于当前代码事实，不是单纯前端显示问题
 - 当前已完成一轮真实模型探测：

@@ -1,12 +1,12 @@
 # 📁 Workspace
 
-Workspace 是 Nomi 当前的运行世界 📁🌍
+Workspace 是某个 instance root 下的 agent 工作区 📁🌍
 
 你也可以把它理解成：
 
 > “这个 agent 眼下生活和工作的那块地盘。”
 
-默认路径：
+默认实例下的默认路径：
 
 ```text
 ~/.nomi/workspace
@@ -18,27 +18,28 @@ Workspace 是 Nomi 当前的运行世界 📁🌍
 
 ---
 
-## Workspace 和 `~/.nomi` 的关系
+## Workspace 和 Instance Root 的关系
 
 这里最容易搞混，所以一定要先分清两个层级 👇
 
-### 1. `~/.nomi`
+### 1. `<instance-root>`
 
-全局运行目录，通常放：
+实例运行目录，通常放：
 
 - `config.json`
 - `logs/`
 - `history/`
 - `skills/`
-- `weixin/`
+- `media/`
+- `sessions/`
+- `weixin/`（未显式覆盖 `stateDir` 时）
 
-### 2. `~/.nomi/workspace`
+### 2. `<instance-root>/workspace`
 
 当前 agent 的工作区，通常放：
 
 - bootstrap files
 - memory
-- sessions
 - cron
 
 这两个目录不要混着理解。
@@ -63,7 +64,7 @@ Workspace 是 Nomi 当前的运行世界 📁🌍
 ## 典型目录结构
 
 ```text
-~/.nomi/workspace/
+<instance-root>/workspace/
 ├── AGENTS.md
 ├── SOUL.md
 ├── USER.md
@@ -74,8 +75,6 @@ Workspace 是 Nomi 当前的运行世界 📁🌍
 │   ├── user_profile_candidates.json
 │   ├── .cursor
 │   └── .dream_cursor
-├── sessions/
-│   └── *.jsonl
 └── cron/
     └── jobs.json
 ```
@@ -93,7 +92,6 @@ Workspace 是 Nomi 当前的运行世界 📁🌍
 | `memory/MEMORY.md` | 长期事实记忆 |
 | `memory/history.jsonl` | 长期归档历史 |
 | `memory/user_profile_candidates.json` | 待确认画像候选 |
-| `sessions/*.jsonl` | 短期会话 |
 | `cron/jobs.json` | 应用内调度任务 |
 
 ---
@@ -150,9 +148,11 @@ Workspace 当前承载的是“agent 的运行世界”，不是整个全局配�
 
 所以：
 
-- `config.json` 在 `~/.nomi`
-- 登录态在 `~/.nomi/weixin`
-- logs 在 `~/.nomi/logs`
-- 只有 agent 相关状态在 `workspace`
+- `config.json` 在 `<instance-root>`
+- `sessions` 在 `<instance-root>/sessions`
+- `skills` 在 `<instance-root>/skills`
+- `history` 在 `<instance-root>/history`
+- logs 在 `<instance-root>/logs`
+- 只有 agent 运行工作区和长期记忆在 `<instance-root>/workspace`
 
 文档里如果把这些全写进 workspace，会让用户误解路径层级。

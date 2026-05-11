@@ -8,6 +8,8 @@ import typer
 
 from nomi import __logo__
 from nomi.cli.render import console
+from nomi.cli.support.config import instance_option, instance_root_option, resolve_runtime_instance
+from nomi.config.instance import DEFAULT_INSTANCE_NAME, ensure_instance_layout, register_instance
 from nomi.config.paths import get_workspace_path
 from nomi.config.schema import Config
 from nomi.utils.workspace import sync_workspace_templates
@@ -27,6 +29,8 @@ def register_onboard_command(app: typer.Typer) -> None:
     def onboard(
         workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
         config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
+        instance: str | None = instance_option(),
+        instance_root: str | None = instance_root_option(),
         wizard: bool = typer.Option(False, "--wizard", help="Use interactive wizard"),
     ) -> None:
         """初始化配置文件与工作区。
@@ -46,12 +50,22 @@ def register_onboard_command(app: typer.Typer) -> None:
             set_config_path,
         )
 
+        context = resolve_runtime_instance(
+            instance=instance,
+            instance_root=instance_root,
+            config=config,
+            allow_missing_config=True,
+        )
+        ensure_instance_layout(context.root)
+        if context.name and context.name != DEFAULT_INSTANCE_NAME:
+            register_instance(context.name, context.root)
         if config:
             config_path = Path(config).expanduser().resolve()
             set_config_path(config_path)
-            console.print(f"[dim]使用配置文件：{config_path}[/dim]")
         else:
             config_path = get_config_path()
+        console.print(f"[dim]实例：{context.name or '(unregistered)'}[/dim]")
+        console.print(f"[dim]实例 root：{context.root}[/dim]")
 
         def _apply_workspace_override(loaded: Config) -> Config:
             if workspace:
@@ -112,7 +126,11 @@ def register_onboard_command(app: typer.Typer) -> None:
         sync_workspace_templates(workspace_path)
 
         agent_cmd = 'nomi agent -m "你好！"'
-        if config:
+        if instance_root:
+            agent_cmd += f" --instance-root {context.root}"
+        elif context.name and context.name != DEFAULT_INSTANCE_NAME:
+            agent_cmd += f" --instance {context.name}"
+        elif config:
             agent_cmd += f" --config {config_path}"
 
         console.print(f"\n{__logo__} nomi 已就绪！")

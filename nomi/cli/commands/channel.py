@@ -16,7 +16,11 @@ from nomi.channel.service.usecases import (
     stop_channel_service,
     tail_channel_service_log,
 )
-from nomi.cli.support.config import load_runtime_config
+from nomi.cli.support.config import (
+    instance_option,
+    instance_root_option,
+    load_runtime_config,
+)
 from nomi.cli.support.runtime_factory import make_runtime
 from nomi.utils.workspace import sync_workspace_templates
 
@@ -37,9 +41,17 @@ def register_channel_command(app: typer.Typer) -> None:
     def login(
         force: bool = typer.Option(False, "--force", "-f", help="Force re-authentication"),
         config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+        instance: str | None = instance_option(),
+        instance_root: str | None = instance_root_option(),
     ) -> None:
         """执行当前启用 channel 的交互式登录。"""
-        loaded_config = load_runtime_config(config, None, silent=True)
+        loaded_config = load_runtime_config(
+            config,
+            None,
+            instance=instance,
+            instance_root=instance_root,
+            silent=True,
+        )
         kind = get_active_channel_kind(loaded_config)
         if not kind:
             raise typer.BadParameter(
@@ -54,9 +66,17 @@ def register_channel_command(app: typer.Typer) -> None:
     def run(
         workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
         config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+        instance: str | None = instance_option(),
+        instance_root: str | None = instance_root_option(),
     ) -> None:
         """以前台方式运行当前启用的 channel，并默认打印日志。"""
-        loaded_config = load_runtime_config(config, workspace, silent=True)
+        loaded_config = load_runtime_config(
+            config,
+            workspace,
+            instance=instance,
+            instance_root=instance_root,
+            silent=True,
+        )
         sync_workspace_templates(loaded_config.workspace_path, silent=True)
         logger.enable("nomi")
         run_channel_foreground(loaded_config, make_runtime)
@@ -65,9 +85,17 @@ def register_channel_command(app: typer.Typer) -> None:
     def serve_internal(
         workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
         config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+        instance: str | None = instance_option(),
+        instance_root: str | None = instance_root_option(),
     ) -> None:
         """后台 service 专用入口，绕过外层互斥检查。"""
-        loaded_config = load_runtime_config(config, workspace, silent=True)
+        loaded_config = load_runtime_config(
+            config,
+            workspace,
+            instance=instance,
+            instance_root=instance_root,
+            silent=True,
+        )
         sync_workspace_templates(loaded_config.workspace_path, silent=True)
         logger.enable("nomi")
         serve_channel_internal(loaded_config, make_runtime)
@@ -76,28 +104,60 @@ def register_channel_command(app: typer.Typer) -> None:
     def start(
         workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
         config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+        instance: str | None = instance_option(),
+        instance_root: str | None = instance_root_option(),
     ) -> None:
         """后台启动当前启用的 channel service。"""
-        loaded_config = load_runtime_config(config, workspace, silent=True)
-        start_channel_service(config, workspace, loaded_config)
+        loaded_config = load_runtime_config(
+            config,
+            workspace,
+            instance=instance,
+            instance_root=instance_root,
+            silent=True,
+        )
+        start_channel_service(config, workspace, loaded_config, instance=instance, instance_root=instance_root)
 
     @channel_app.command("log")
-    def log() -> None:
+    def log(
+        instance: str | None = instance_option(),
+        instance_root: str | None = instance_root_option(),
+        config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+    ) -> None:
         """实时展示后台 channel service 日志，Ctrl+C 退出但不影响后台。"""
+        load_runtime_config(config, None, instance=instance, instance_root=instance_root, silent=True)
         tail_channel_service_log()
 
     @channel_app.command("stop")
-    def stop() -> None:
+    def stop(
+        instance: str | None = instance_option(),
+        instance_root: str | None = instance_root_option(),
+        config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+    ) -> None:
         """停止后台 channel service。"""
-        stop_channel_service()
+        loaded_config = load_runtime_config(config, None, instance=instance, instance_root=instance_root, silent=True)
+        stop_channel_service(loaded_config)
 
     @channel_app.command("restart")
     def restart(
         workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
         config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+        instance: str | None = instance_option(),
+        instance_root: str | None = instance_root_option(),
     ) -> None:
         """重启后台 channel service；未运行时则直接启动。"""
-        loaded_config = load_runtime_config(config, workspace, silent=True)
-        restart_channel_service(config, workspace, loaded_config)
+        loaded_config = load_runtime_config(
+            config,
+            workspace,
+            instance=instance,
+            instance_root=instance_root,
+            silent=True,
+        )
+        restart_channel_service(
+            config,
+            workspace,
+            loaded_config,
+            instance=instance,
+            instance_root=instance_root,
+        )
 
     app.add_typer(channel_app, name="channel")

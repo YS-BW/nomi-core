@@ -16,7 +16,7 @@ from dulwich import porcelain
 from loguru import logger
 
 from nomi.config.loader import get_config_path, load_config
-from nomi.config.paths import DEFAULT_EXTERNAL_SKILL_ROOTS, GLOBAL_SKILLS_DIR
+from nomi.config.paths import DEFAULT_EXTERNAL_SKILL_ROOTS, get_skills_dir
 from nomi.utils.fs import ensure_dir
 
 ARCHIVE_SUFFIXES = (
@@ -57,7 +57,7 @@ class SkillManager:
         返回:
             无返回值。
         """
-        self.root = (root or GLOBAL_SKILLS_DIR).expanduser()
+        self.root = (root or get_skills_dir()).expanduser()
         self.external_roots = self._resolve_external_roots(external_roots)
 
     def install(self, source: str) -> tuple[bool, str]:
@@ -288,7 +288,7 @@ class SkillManager:
         """解析外部 skill roots。"""
         roots = external_roots
         if roots is None:
-            if self.root.resolve(strict=False) == GLOBAL_SKILLS_DIR.resolve(strict=False):
+            if self.root.resolve(strict=False) == get_skills_dir().resolve(strict=False):
                 roots = self._load_external_roots_from_config()
             else:
                 roots = []

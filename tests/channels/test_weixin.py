@@ -14,6 +14,7 @@ import pytest
 from nomi.bus.events import OutboundMessage
 from nomi.bus.queue import MessageBus
 from nomi.channel.adapters.weixin.channel import WeixinChannel
+from nomi.config.instance import instance_context_scope
 from nomi.config.schema import Config
 from nomi.session.errors import SessionNotFoundError
 
@@ -82,18 +83,19 @@ def test_weixin_print_qr_code_uses_qrcode_when_available(monkeypatch, capsys) ->
 
 def test_weixin_login_clears_workspace_sessions(tmp_path: Path, monkeypatch) -> None:
     channel = _make_channel(tmp_path)
-    sessions_dir = Path(channel.runtime.config.workspace_path) / "sessions"
-    sessions_dir.mkdir(parents=True, exist_ok=True)
-    (sessions_dir / "wx-user.jsonl").write_text("{}", encoding="utf-8")
+    sessions_dir = tmp_path / "instance-root" / "sessions"
+    with instance_context_scope(instance_root=tmp_path / "instance-root"):
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        (sessions_dir / "wx-user.jsonl").write_text("{}", encoding="utf-8")
 
-    async def fake_qr_login() -> bool:
-        return True
+        async def fake_qr_login() -> bool:
+            return True
 
-    monkeypatch.setattr(channel, "_qr_login", fake_qr_login)
+        monkeypatch.setattr(channel, "_qr_login", fake_qr_login)
 
-    asyncio.run(channel.login())
+        asyncio.run(channel.login())
 
-    assert not sessions_dir.exists()
+        assert not sessions_dir.exists()
 
 
 def test_weixin_login_clears_saved_auth_state_before_relogin(tmp_path: Path, monkeypatch) -> None:

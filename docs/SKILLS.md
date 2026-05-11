@@ -1,6 +1,6 @@
 # 📦 Skills
 
-Skills 是 Nomi 当前的“全局任务说明包”机制 📦
+Skills 是当前实例下的“任务说明包”机制 📦
 
 它不是 tool，也不是硬编码在 prompt 里的几段死文本。
 
@@ -20,9 +20,15 @@ Skills 是 Nomi 当前的“全局任务说明包”机制 📦
 ~/.nomi/skills
 ```
 
-路径常量在 [nomi/config/paths.py](../nomi/config/paths.py#L10-L14)。
+命名实例下则是：
 
-它是当前唯一的 canonical root。`SkillRegistry` 只扫描这里，`SkillManager` 也只把这里当成正式安装目录。
+```text
+<instance-root>/skills
+```
+
+路径逻辑在 [nomi/config/paths.py](../nomi/config/paths.py#L30-L52)。
+
+它是当前实例内唯一的 canonical root。`SkillRegistry` 只扫描这里，`SkillManager` 也只把这里当成正式安装目录。
 
 系统还支持一组外部 skill roots，默认包括：
 

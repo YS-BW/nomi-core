@@ -7,25 +7,67 @@ from pathlib import Path
 
 import pydantic
 
+from nomi.config.instance import (
+    InstanceContext,
+    ensure_instance_layout,
+    get_instance_root,
+    resolve_instance_context,
+    set_instance_context,
+)
 from nomi.config.schema import Config
 
-# 运行时允许切换配置文件路径，以便同一进程支持多实例。
-_current_config_path: Path | None = None
-
 _REMOVED_TOP_LEVEL_KEYS = ("api", "gateway", "channels")
+_current_config_path: Path | None = None
 
 
 def set_config_path(path: Path) -> None:
     """设置当前配置文件路径。"""
     global _current_config_path
-    _current_config_path = path
+    _current_config_path = path.expanduser().resolve()
+    ensure_instance_layout(_current_config_path.parent)
+    set_instance_context(
+        InstanceContext(
+            name=None,
+            root=_current_config_path.parent,
+        )
+    )
+
+
+def set_instance_root(path: Path, *, name: str | None = None) -> None:
+    """设置当前实例 root。"""
+    global _current_config_path
+    _current_config_path = path.expanduser().resolve() / "config.json"
+    ensure_instance_layout(_current_config_path.parent)
+    set_instance_context(
+        InstanceContext(
+            name=name,
+            root=_current_config_path.parent,
+        )
+    )
 
 
 def get_config_path() -> Path:
     """返回当前配置文件路径。"""
-    if _current_config_path:
-        return _current_config_path
-    return Path.home() / ".nomi" / "config.json"
+    return get_instance_root() / "config.json"
+
+
+def configure_instance_context(
+    *,
+    instance: str | None = None,
+    instance_root: str | Path | None = None,
+    config_path: str | Path | None = None,
+) -> InstanceContext:
+    """按优先级解析并激活当前实例上下文。"""
+    global _current_config_path
+    context = resolve_instance_context(
+        instance=instance,
+        instance_root=instance_root,
+        config_path=config_path,
+    )
+    ensure_instance_layout(context.root)
+    set_instance_context(context)
+    _current_config_path = context.config_path
+    return context
 
 
 def load_config(config_path: Path | None = None) -> Config:
@@ -43,7 +85,7 @@ def load_config(config_path: Path | None = None) -> Config:
     path = config_path or get_config_path()
 
     if not path.exists():
-        return Config()
+        return _apply_instance_defaults(Config())
 
     try:
         with open(path, encoding="utf-8-sig") as file:
@@ -54,7 +96,7 @@ def load_config(config_path: Path | None = None) -> Config:
     _raise_if_removed_keys_present(data, path)
 
     try:
-        return Config.model_validate(data)
+        return _apply_instance_defaults(Config.model_validate(data))
     except pydantic.ValidationError as exc:
         raise ValueError(f"配置文件校验失败: {path}\n{exc}") from exc
 
@@ -74,7 +116,7 @@ def resolve_config_env_vars(config: Config) -> Config:
     """返回已解析 `${VAR}` 环境变量占位符的新配置对象。"""
     data = config.model_dump(mode="json", by_alias=True)
     data = _resolve_env_vars(data)
-    return Config.model_validate(data)
+    return _apply_instance_defaults(Config.model_validate(data))
 
 
 def _resolve_env_vars(obj: object) -> object:
@@ -130,3 +172,13 @@ def _raise_if_removed_keys_present(data: object, path: Path) -> None:
         f"配置文件包含已移除的顶层字段: {removed_list}。"
         f"请从 {path} 删除这些字段后重试。"
     )
+
+
+def _apply_instance_defaults(config: Config) -> Config:
+    """把实例 root 相关默认路径写回配置对象。"""
+    instance_root = get_instance_root()
+    default_workspace = (Path.home() / ".nomi" / "workspace").resolve(strict=False)
+    current_workspace = Path(config.agents.defaults.workspace).expanduser().resolve(strict=False)
+    if current_workspace == default_workspace:
+        config.agents.defaults.workspace = str(instance_root / "workspace")
+    return config

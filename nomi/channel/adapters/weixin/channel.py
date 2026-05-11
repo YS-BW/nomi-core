@@ -22,7 +22,7 @@ from loguru import logger
 from nomi.agent.context.message_codec import detect_image_mime
 from nomi.bus.events import OutboundMessage
 from nomi.channel.base import BaseChannel
-from nomi.config.paths import get_media_dir, get_runtime_subdir
+from nomi.config.paths import get_media_dir, get_runtime_subdir, get_sessions_dir
 from nomi.runtime.protocol import default_session_id
 from nomi.session.errors import SessionNotFoundError
 from .streaming import (
@@ -318,7 +318,7 @@ class WeixinChannel(BaseChannel):
             state_path.unlink()
 
     def _clear_workspace_sessions(self) -> None:
-        """清空当前工作区下的全部会话持久化数据。
+        """清空当前实例下的全部会话持久化数据。
 
         参数:
             无。
@@ -326,7 +326,7 @@ class WeixinChannel(BaseChannel):
         返回:
             无返回值。
         """
-        sessions_dir = self.runtime.config.workspace_path / "sessions"
+        sessions_dir = get_sessions_dir()
         if sessions_dir.exists():
             shutil.rmtree(sessions_dir)
 

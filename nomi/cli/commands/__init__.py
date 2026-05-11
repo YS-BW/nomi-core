@@ -6,6 +6,7 @@ import typer
 
 from nomi.cli.commands.agent import register_agent_command
 from nomi.cli.commands.channel import register_channel_command
+from nomi.cli.commands.instance import register_instance_command
 from nomi.cli.commands.onboard import register_onboard_command
 from nomi.cli.commands.remote import register_remote_command
 from nomi.cli.commands.status import register_status_command
@@ -21,6 +22,7 @@ def register_commands(app: typer.Typer) -> None:
         无返回值。
     """
     register_onboard_command(app)
+    register_instance_command(app)
     register_agent_command(app)
     register_channel_command(app)
     register_remote_command(app)

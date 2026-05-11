@@ -25,7 +25,7 @@ Session 是 Nomi 当前“短期对话上下文”的持久化层 💬
 当前 session 保存在：
 
 ```text
-~/.nomi/workspace/sessions/*.jsonl
+<instance-root>/sessions/*.jsonl
 ```
 
 格式是 JSONL：
@@ -148,6 +148,7 @@ Session 是 Nomi 当前“短期对话上下文”的持久化层 💬
   - `archived`
   - `source`
 - remote facade 在读取历史、取状态、发送消息、中断前会先检查 session 是否存在；不存在就直接报 `session_not_found`，不会再隐式创建空会话
+- `bind_session` 也只允许绑定已存在 session；如果回了 `session_bound`，后续同一 `session_id` 就不应立刻再走 `session_not_found`
 
 相关代码：
 
