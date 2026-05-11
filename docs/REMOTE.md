@@ -161,7 +161,9 @@ Authorization: Bearer <remote.auth_token>
   - `mcp_disable`
 - Provider 设置：
   - `get_provider_state`
+  - `list_providers`
   - `set_provider_settings`
+  - `update_provider`
   - `set_active_provider`
   - `reload_runtime`
 - 运行态管理：

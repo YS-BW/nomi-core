@@ -201,6 +201,8 @@ utils         = 低层通用小工具
 - desktop 当前通过 `get_provider_state / list_providers / set_provider_settings / update_provider / set_active_provider / reload_runtime` 驱动 provider 设置 UI
 - 当前 provider/model 切换的生效语义固定为 `reload_runtime`，不是热更新，也不是 session-bound
 - 浏览器 demo 当前通过 `ws://.../ws?token=...` 联调 remote；正式客户端仍优先使用 `Authorization: Bearer ...`
+- `AutoCompact.check_expired()` 当前已兼容 `SessionManager.list_sessions()` 的旧 `list[dict]` 和 remote 分页 `dict` 两种返回形状，避免 remote turn 在 `turn_started` 后因会话巡检异常中断
+- 当前 `nomi-core` 协议依赖已升级到 `nomi-protocol v0.6.0`，remote provider management 命令集以该版本为基线
 - CLI 根命令当前固定为：`onboard / agent / channel / remote / status`
 - 当前已经有 `nomi channel login weixin`
 - 微信 channel 第一版固定为个人微信私聊文本入口，不做流式、不做群聊、不做媒体

@@ -82,9 +82,18 @@ class AutoCompact:
         返回:
             None。
         """
-        for info in self.sessions.list_sessions():
+        listing = self.sessions.list_sessions()
+        items = listing.get("sessions", []) if isinstance(listing, dict) else listing
+        for info in items:
+            if not isinstance(info, dict):
+                continue
             key = info.get("key", "")
-            if key and key not in self._archiving and self._is_expired(info.get("updated_at")):
+            if not key:
+                key = str(info.get("session_id") or "")
+            updated_at = info.get("updated_at")
+            if updated_at is None and info.get("updated_at_ms") is not None:
+                updated_at = datetime.fromtimestamp(float(info["updated_at_ms"]) / 1000.0)
+            if key and key not in self._archiving and self._is_expired(updated_at):
                 self._archiving.add(key)
                 logger.debug("Auto-compact: scheduling archival for {} (idle > {} min)", key, self._ttl)
                 schedule_background(self._archive(key))

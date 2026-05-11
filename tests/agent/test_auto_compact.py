@@ -567,6 +567,45 @@ class TestProactiveAutoCompact:
         await loop.close_mcp()
 
     @pytest.mark.asyncio
+    async def test_proactive_archive_accepts_paginated_session_listing(self, tmp_path):
+        """分页 list_sessions 返回值也应触发空闲会话归档。"""
+        loop = _make_loop(tmp_path, idle_compact_after_minutes=15)
+        session = loop.sessions.get_or_create("cli:test")
+        _add_turns(session, 5, prefix="old")
+        session.updated_at = datetime.now() - timedelta(minutes=20)
+        loop.sessions.save(session)
+
+        real_list_sessions = loop.sessions.list_sessions
+        loop.sessions.list_sessions = MagicMock(  # type: ignore[method-assign]
+            side_effect=lambda: {
+                "sessions": [
+                    {
+                        "session_id": "cli:test",
+                        "updated_at_ms": int(session.updated_at.timestamp() * 1000),
+                    },
+                ],
+                "next_page_token": None,
+                "total_count": 1,
+            },
+        )
+
+        archived_messages = []
+
+        async def _fake_archive(messages):
+            archived_messages.extend(messages)
+            return "User chatted about old things."
+
+        loop.consolidator.archive = _fake_archive
+
+        await self._run_check_expired(loop)
+
+        session_after = loop.sessions.get_or_create("cli:test")
+        assert len(session_after.messages) == loop.auto_compact._RECENT_SUFFIX_MESSAGES
+        assert len(archived_messages) == 2
+        loop.sessions.list_sessions = real_list_sessions  # type: ignore[method-assign]
+        await loop.close_mcp()
+
+    @pytest.mark.asyncio
     async def test_no_proactive_archive_when_active(self, tmp_path):
         """Recently active session should NOT be archived on idle tick."""
         loop = _make_loop(tmp_path, idle_compact_after_minutes=15)
