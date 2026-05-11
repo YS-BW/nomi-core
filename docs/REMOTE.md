@@ -274,11 +274,14 @@ Provider 设置当前语义固定为：
   - 不传时由 core 生成 `remote:<uuid>`
   - 成功后返回 `session_created`
   - 新会话创建后可立即 `bind_session + load_history + send_message`
+- `bind_session`
+  - 只允许绑定已经存在的 session
+  - 对不存在或已删除 session 返回 `error.code = session_not_found`
 - `delete_session`
   - 成功后返回 `session_deleted`
   - 如果仍有 remote client 绑定在该 session 上，返回 `error.code = session_delete_forbidden`
 - 缺失会话错误
-  - `load_history / get_status / send_message / interrupt_turn` 对不存在或已删除 session 都返回 `error.code = session_not_found`
+  - `bind_session / load_history / get_status / send_message / interrupt_turn` 对不存在或已删除 session 都返回 `error.code = session_not_found`
   - `load_history` 不再隐式创建空 session
 - `error`
   - 现在会额外带上 `code` 和 `command`

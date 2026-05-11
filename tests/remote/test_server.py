@@ -675,6 +675,9 @@ async def test_remote_server_rebinds_to_single_current_session() -> None:
             ready = json.loads(await websocket.recv())
             assert ready["type"] == "ready"
 
+            runtime.create_session("desktop:one")
+            runtime.create_session("desktop:two")
+
             await websocket.send(json.dumps({"type": "bind_session", "session_id": "desktop:one"}))
             bound_one = json.loads(await websocket.recv())
             assert bound_one == {"type": "session_bound", "session_id": "desktop:one"}
@@ -704,6 +707,34 @@ async def test_remote_server_rebinds_to_single_current_session() -> None:
             assert current["type"] == "message"
             assert current["session_id"] == "desktop:two"
             assert current["content"] == "当前会话消息"
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_remote_server_bind_session_rejects_missing_session() -> None:
+    config = Config()
+    config.remote.enabled = True
+    config.remote.host = "127.0.0.1"
+    config.remote.port = 8882
+    config.remote.auth_token = "secret-token"
+    runtime = _FakeRuntime()
+    server = RemoteServer(config, runtime)  # type: ignore[arg-type]
+
+    await server.start()
+    try:
+        async with connect(
+            "ws://127.0.0.1:8882/ws",
+            additional_headers={"Authorization": "Bearer secret-token"},
+        ) as websocket:
+            await websocket.recv()
+
+            await websocket.send(json.dumps({"type": "bind_session", "session_id": "desktop:missing"}))
+            error = json.loads(await websocket.recv())
+            assert error["type"] == "error"
+            assert error["code"] == "session_not_found"
+            assert error["command"] == "bind_session"
+            assert error["session_id"] == "desktop:missing"
     finally:
         await server.stop()
 

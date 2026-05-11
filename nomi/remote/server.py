@@ -207,6 +207,7 @@ class RemoteServer:
         try:
             if command.type == "bind_session":
                 session_id = self._require_session_id(command)
+                self._runtime.load_session_messages(session_id, limit=1)
                 await self._hub.bind_session(client.client_key, session_id)
                 await client.send_json(build_session_bound_event(session_id=session_id))
                 return
