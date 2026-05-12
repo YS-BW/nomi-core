@@ -31,7 +31,7 @@ class AgentDefaults(Base):
     max_tool_result_chars: int = 16_000
     provider_retry_mode: Literal["standard", "persistent"] = "standard"
     reasoning_effort: str | None = None
-    timezone: str = "UTC"
+    timezone: str = "Asia/Shanghai"
     unified_session: bool = False
     idle_compact_after_minutes: int = Field(default=0, ge=0)
     dream: DreamConfig = Field(default_factory=DreamConfig)
