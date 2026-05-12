@@ -96,6 +96,8 @@ nomi --version
 
 ## 快速开始
 
+完整日常命令见 [Nomi 操作手册](./docs/OPERATIONS.md)。
+
 ### 1. 初始化配置
 
 ```bash

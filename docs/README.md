@@ -30,6 +30,7 @@
 
 | 文档 | 说明 |
 |---|---|
+| [OPERATIONS.md](./OPERATIONS.md) | 日常操作手册：初始化、实例、remote、微信 channel、日志与状态 |
 | [CLI.md](./CLI.md) | 终端入口、交互循环、快捷键、slash 命令 |
 | [INSTANCE.md](./INSTANCE.md) | 实例模型、实例命令组、实例级路径与 service 管理 |
 | [WEIXIN.md](./WEIXIN.md) | 微信 channel 的登录、运行、消息收发和分段规则 |
