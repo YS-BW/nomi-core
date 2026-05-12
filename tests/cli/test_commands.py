@@ -316,7 +316,10 @@ def test_agent_uses_default_config_when_no_workspace_or_config_flags(mock_agent_
     assert mock_agent_runtime["sync_templates"].call_args.args == (
         mock_agent_runtime["config"].workspace_path,
     )
-    mock_agent_runtime["make_runtime"].assert_called_once_with(mock_agent_runtime["config"])
+    mock_agent_runtime["make_runtime"].assert_called_once_with(
+        mock_agent_runtime["config"],
+        reminder_consumer="cli",
+    )
     mock_agent_runtime["runtime"].run_once.assert_awaited_once()
     mock_agent_runtime["print_response"].assert_called_once_with(
         "mock-response", render_markdown=True, metadata={},
@@ -336,7 +339,10 @@ def test_agent_warns_when_default_config_file_is_missing(monkeypatch, tmp_path: 
     runtime = MagicMock()
     runtime.run_once = AsyncMock(return_value=OutboundMessage(channel="cli", chat_id="direct", content="ok"))
     runtime.close = AsyncMock(return_value=None)
-    monkeypatch.setattr("nomi.cli.commands.agent.make_runtime", lambda _config: runtime)
+    monkeypatch.setattr(
+        "nomi.cli.commands.agent.make_runtime",
+        lambda _config, reminder_consumer=None: runtime,
+    )
     monkeypatch.setattr("nomi.cli.commands.agent.print_agent_response", lambda *_args, **_kwargs: None)
 
     result = runner.invoke(app, ["agent", "-m", "hello"])
@@ -375,10 +381,13 @@ def test_agent_config_sets_active_path(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("nomi.cli.support.config.load_config", lambda _path=None: config)
     monkeypatch.setattr("nomi.cli.support.config.resolve_config_env_vars", lambda loaded: loaded)
     monkeypatch.setattr("nomi.cli.commands.agent.sync_workspace_templates", lambda _path: None)
-    monkeypatch.setattr("nomi.cli.commands.agent.make_runtime", lambda _config: MagicMock(
-        run_once=AsyncMock(return_value=OutboundMessage(channel="cli", chat_id="direct", content="ok")),
-        close=AsyncMock(return_value=None),
-    ))
+    monkeypatch.setattr(
+        "nomi.cli.commands.agent.make_runtime",
+        lambda _config, reminder_consumer=None: MagicMock(
+            run_once=AsyncMock(return_value=OutboundMessage(channel="cli", chat_id="direct", content="ok")),
+            close=AsyncMock(return_value=None),
+        ),
+    )
     monkeypatch.setattr("nomi.cli.commands.agent.print_agent_response", lambda *_args, **_kwargs: None)
 
     result = runner.invoke(app, ["agent", "-m", "hello", "-c", str(config_file)])
@@ -402,7 +411,10 @@ def test_agent_overrides_workspace_path(mock_agent_runtime) -> None:
     assert mock_agent_runtime["sync_templates"].call_args.args == (
         mock_agent_runtime["config"].workspace_path,
     )
-    mock_agent_runtime["make_runtime"].assert_called_once_with(mock_agent_runtime["config"])
+    mock_agent_runtime["make_runtime"].assert_called_once_with(
+        mock_agent_runtime["config"],
+        reminder_consumer="cli",
+    )
 
 
 def test_agent_workspace_override_wins_over_config_workspace(
@@ -735,6 +747,10 @@ def test_channel_run_requires_enabled_channel(monkeypatch) -> None:
 
     monkeypatch.setattr("nomi.cli.commands.channel.load_runtime_config", lambda *_args, **_kwargs: loaded_config)
     monkeypatch.setattr("nomi.cli.commands.channel.sync_workspace_templates", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "nomi.cli.commands.channel.run_channel_foreground",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(typer.BadParameter("当前未启用任何 channel。")),
+    )
 
     result = runner.invoke(app, ["channel", "run"])
 
@@ -878,6 +894,12 @@ def test_channel_start_requires_login_state(monkeypatch, tmp_path: Path) -> None
     loaded_config.channel.weixin.state_dir = str(tmp_path / "weixin")
 
     monkeypatch.setattr("nomi.cli.commands.channel.load_runtime_config", lambda *_args, **_kwargs: loaded_config)
+    monkeypatch.setattr(
+        "nomi.cli.commands.channel.start_channel_service",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            typer.BadParameter("weixin channel 已启用，但未找到可用登录态。")
+        ),
+    )
 
     result = runner.invoke(app, ["channel", "start"])
 
@@ -1052,6 +1074,10 @@ def test_status_reports_channel_runtime_state(monkeypatch, tmp_path: Path) -> No
     monkeypatch.setattr("nomi.cli.support.status.get_config_path", lambda: config_path)
     monkeypatch.setattr("nomi.cli.support.status.load_config", lambda _path=None: config)
     monkeypatch.setattr(
+        "nomi.tasks.runner.TaskRunner.read_scheduler_owner_info",
+        lambda _self: {"owner": "weixin", "acquired_at_ms": "123"},
+    )
+    monkeypatch.setattr(
         "nomi.cli.support.status.build_channel_status_snapshot",
         lambda *_args, **_kwargs: __import__("types").SimpleNamespace(
             enabled=True,
@@ -1079,6 +1105,8 @@ def test_status_reports_channel_runtime_state(monkeypatch, tmp_path: Path) -> No
     assert "mimo-v2.5" in stripped
     assert "Timezone" in stripped
     assert "Asia/Shanghai" in stripped
+    assert "Task Scheduler Owner" in stripped
+    assert "Task Scheduler Active" in stripped
     assert "Channel Enabled" in stripped
     assert "Channel Owner" in stripped
     assert "Channel Running" in stripped
@@ -1102,6 +1130,10 @@ def test_status_reports_remote_runtime_state(monkeypatch, tmp_path: Path) -> Non
 
     monkeypatch.setattr("nomi.cli.support.status.get_config_path", lambda: config_path)
     monkeypatch.setattr("nomi.cli.support.status.load_config", lambda _path=None: config)
+    monkeypatch.setattr(
+        "nomi.tasks.runner.TaskRunner.read_scheduler_owner_info",
+        lambda _self: {"owner": "remote", "acquired_at_ms": "123"},
+    )
     monkeypatch.setattr(
         "nomi.cli.support.status.build_channel_status_snapshot",
         lambda *_args, **_kwargs: __import__("types").SimpleNamespace(
@@ -1136,6 +1168,8 @@ def test_status_reports_remote_runtime_state(monkeypatch, tmp_path: Path) -> Non
     stripped = _strip_ansi(result.stdout)
     assert "Remote Enabled" in stripped
     assert "yes" in stripped
+    assert "Task Scheduler Owner" in stripped
+    assert "remote" in stripped
     assert "Remote Running" in stripped
     assert "Remote Host" in stripped
     assert "127.0.0.1" in stripped

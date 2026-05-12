@@ -20,11 +20,15 @@ def make_provider(config: Config, *, silent: bool = False):
         raise typer.Exit(1) from exc
 
 
-def make_runtime(config: Config, *, silent: bool = False):
+def make_runtime(config: Config, *, silent: bool = False, reminder_consumer: str | None = None):
     """根据当前配置装配一份 CLI 复用 runtime。"""
     provider_builder = (
         (lambda cfg: make_provider(cfg, silent=True))
         if silent
         else make_provider
     )
-    return NomiRuntime.from_config(config, provider_builder=provider_builder)
+    return NomiRuntime.from_config(
+        config,
+        provider_builder=provider_builder,
+        reminder_consumer=reminder_consumer,
+    )

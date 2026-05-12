@@ -36,13 +36,15 @@ class DispatchRuntime:
         loop = self._loop
         loop._control.mark_running(True)
         await loop._connect_mcp()
-        loop.cron_service.start()
+        loop.tasks.start_scheduler()
         logger.info("Agent loop started")
 
         while loop._control.is_running():
             try:
                 msg = await asyncio.wait_for(loop.bus.consume_inbound(), timeout=1.0)
             except asyncio.TimeoutError:
+                loop.tasks.poll_scheduler()
+                await loop.poll_global_reminders()
                 loop.auto_compact.check_expired(loop._schedule_background)
                 continue
             except asyncio.CancelledError:
@@ -136,6 +138,7 @@ class DispatchRuntime:
         session_key: str = "cli:direct",
         channel: str = "cli",
         chat_id: str = "direct",
+        history_session_key: str | None = None,
         on_progress: Callable[[str], Awaitable[None]] | None = None,
         on_stream: Callable[[str], Awaitable[None]] | None = None,
         on_stream_end: Callable[..., Awaitable[None]] | None = None,
@@ -163,6 +166,7 @@ class DispatchRuntime:
                     return await loop._process_message_result(
                         msg,
                         session_key=normalized_key,
+                        history_session_key=history_session_key,
                         on_progress=on_progress,
                         on_stream=on_stream,
                         on_stream_end=on_stream_end,

@@ -148,7 +148,7 @@ async def run_remote_foreground(loaded_config, runtime_factory) -> None:
     pid_path = get_service_pid_path()
     state_path = get_service_state_path()
     log_path = get_service_log_path()
-    runtime = runtime_factory(loaded_config)
+    runtime = runtime_factory(loaded_config, reminder_consumer="remote")
     server = RemoteServer(loaded_config, runtime)
     try:
         await runtime.start()

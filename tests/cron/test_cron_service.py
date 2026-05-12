@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta
 
 import pytest
@@ -200,3 +201,46 @@ async def test_cron_service_disables_one_shot_job_when_not_delete_after_run(tmp_
     assert all_jobs[0].enabled is False
     assert all_jobs[0].state.last_status == "ok"
     assert len(all_jobs[0].state.run_history) == 1
+
+
+@pytest.mark.asyncio
+async def test_rearming_timer_does_not_cancel_running_due_job(tmp_path) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls: list[str] = []
+
+    async def _on_job(job) -> None:
+        calls.append(job.id)
+        started.set()
+        await release.wait()
+
+    service = CronService(
+        tmp_path / "cron" / "jobs.json",
+        on_job=_on_job,
+        default_timezone="Asia/Shanghai",
+    )
+    job = service.add_job(
+        name="once-no-cancel",
+        schedule=CronSchedule(kind="at", at_ms=int(datetime.fromisoformat(_future_iso()).timestamp() * 1000)),
+        target_kind="task",
+        target_id="task_once_no_cancel",
+        delete_after_run=True,
+    )
+
+    service.start()
+    stored = service.get_job(job.id)
+    assert stored is not None
+    stored.state.next_run_at_ms = 0
+
+    run_task = asyncio.create_task(service.run_due_jobs())
+    await started.wait()
+
+    service._arm_timer()
+    assert not run_task.done()
+
+    release.set()
+    await run_task
+    await service.stop()
+
+    assert calls == [job.id]
+    assert service.get_job(job.id) is None

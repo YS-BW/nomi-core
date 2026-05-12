@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal
+
+import fcntl
 
 from loguru import logger
 
 from nomi.cron import CronJob, CronSchedule, CronService
-from nomi.tasks.delivery import TaskDelivery
+from nomi.cron.types import CronJobState, CronPayload
+from nomi.config.paths import get_logs_dir, get_reminder_store_path
 from nomi.tasks.models import Task, TaskPayload
+from nomi.tasks.reminder_store import ReminderStore
 from nomi.tasks.store import TaskStore
 
 if TYPE_CHECKING:
@@ -28,13 +35,29 @@ class TaskRunner:
     """统一管理任务定义、调度与执行。"""
 
     DEFAULT_PREPARE_BEFORE_MS = 10 * 60 * 1000
+    DEFAULT_EXECUTION_TIMEOUT_SECONDS = 180
+    SCHEDULER_LOCK_FILE = "task_scheduler.lock"
 
     def __init__(self, loop: "AgentLoop", store: TaskStore, cron_service: CronService) -> None:
         """初始化任务 orchestrator。"""
         self._loop = loop
         self._store = store
         self._cron = cron_service
-        self._delivery = TaskDelivery(loop.bus)
+        self._reminders = ReminderStore(get_reminder_store_path())
+        self._scheduler_lock_handle = None
+        self._scheduler_owner = False
+        self._last_reconciled_store_mtime_ns: int | None = None
+        defaults = getattr(getattr(loop, "context", None), "timezone", None)
+        self._scheduler_owner_name = (
+            str(getattr(loop, "reminder_consumer", None) or "").strip() or "cli"
+        )
+        loaded_config = getattr(loop, "config", None)
+        if loaded_config is not None:
+            self._task_execution_timeout_seconds = int(
+                loaded_config.agents.defaults.task_execution_timeout_seconds
+            )
+        else:
+            self._task_execution_timeout_seconds = self.DEFAULT_EXECUTION_TIMEOUT_SECONDS
 
     @property
     def store(self) -> TaskStore:
@@ -126,6 +149,8 @@ class TaskRunner:
     def _register_scheduled_jobs(self, task: Task) -> None:
         """为任务注册底层时间触发器。"""
         self._cron.remove_jobs_for_target("task", task.id)
+        if not task.enabled:
+            return
         if task.execution_type == "scheduled":
             self._cron.add_job(
                 name=task.title,
@@ -159,6 +184,277 @@ class TaskRunner:
             delete_after_run=True,
         )
 
+    def _build_task_jobs(self, task: Task) -> list[CronJob]:
+        """根据任务定义构造一组派生 cron job。"""
+        if not task.enabled:
+            return []
+        now_ms = _now_ms()
+        jobs: list[CronJob] = []
+        if task.execution_type == "scheduled":
+            next_run_at_ms = self._cron._compute_next_run(task.schedule, now_ms)  # noqa: SLF001
+            if next_run_at_ms is None:
+                return []
+            jobs.append(
+                CronJob(
+                    id=f"cron_task_{task.id}_run",
+                    name=task.title,
+                    enabled=True,
+                    schedule=task.schedule,
+                    payload=CronPayload(target_kind="task", target_id=task.id, phase="run"),
+                    state=CronJobState(next_run_at_ms=next_run_at_ms),
+                    created_at_ms=task.created_at_ms or now_ms,
+                    updated_at_ms=task.updated_at_ms or now_ms,
+                    delete_after_run=task.schedule.kind == "at",
+                )
+            )
+            return jobs
+        if task.schedule.kind != "at" or task.deliver_at_ms is None:
+            raise ValueError("prepared_delivery currently requires a one-shot deliver time")
+        prepare_before_ms = task.prepare_before_ms or self.DEFAULT_PREPARE_BEFORE_MS
+        prepare_at_ms = task.deliver_at_ms - prepare_before_ms
+        if prepare_at_ms > now_ms:
+            jobs.append(
+                CronJob(
+                    id=f"cron_task_{task.id}_prepare",
+                    name=f"{task.title}:prepare",
+                    enabled=True,
+                    schedule=CronSchedule(kind="at", at_ms=prepare_at_ms),
+                    payload=CronPayload(target_kind="task", target_id=task.id, phase="prepare"),
+                    state=CronJobState(next_run_at_ms=prepare_at_ms),
+                    created_at_ms=task.created_at_ms or now_ms,
+                    updated_at_ms=task.updated_at_ms or now_ms,
+                    delete_after_run=True,
+                )
+            )
+        if task.deliver_at_ms > now_ms:
+            jobs.append(
+                CronJob(
+                    id=f"cron_task_{task.id}_deliver",
+                    name=f"{task.title}:deliver",
+                    enabled=True,
+                    schedule=CronSchedule(kind="at", at_ms=task.deliver_at_ms),
+                    payload=CronPayload(target_kind="task", target_id=task.id, phase="deliver"),
+                    state=CronJobState(next_run_at_ms=task.deliver_at_ms),
+                    created_at_ms=task.created_at_ms or now_ms,
+                    updated_at_ms=task.updated_at_ms or now_ms,
+                    delete_after_run=True,
+                )
+            )
+        return jobs
+
+    def _has_live_task_job(self, task_id: str) -> bool:
+        """判断任务当前是否仍有派生 task cron。"""
+        return any(
+            job.payload.target_kind == "task" and job.payload.target_id == task_id
+            for job in self._cron.list_jobs(include_disabled=True)
+        )
+
+    def _recover_stale_running_tasks(self) -> int:
+        """恢复没有对应 cron 的陈旧 running task。"""
+        recovered = 0
+        self._store.reload_tasks()
+        for task in self._store.list_tasks(include_disabled=True):
+            if task.run.status != "running":
+                continue
+            if self._has_live_task_job(task.id):
+                continue
+            task.run.status = "failed"
+            task.run.error = "task execution timeout recovery: stale running task without live cron job"
+            task.run.last_run_at_ms = _now_ms()
+            task.run.run_count = max(1, task.run.run_count)
+            logger.warning(
+                "Recovered stale running task: task_id={} session_id={} target_channel={} owner={}",
+                task.id,
+                task.source_session_key,
+                task.target_channel,
+                self._scheduler_owner_name,
+            )
+            self._store.update_task(task)
+            recovered += 1
+        return recovered
+
+    def get_scheduler_snapshot(self) -> dict[str, str | bool]:
+        """返回 task scheduler owner 快照。"""
+        return {
+            "owner": self._scheduler_owner_name,
+            "active": self._scheduler_owner,
+            "lock_path": str(self._scheduler_lock_path()),
+        }
+
+    def read_scheduler_owner_info(self) -> dict[str, str]:
+        """从锁文件读取 scheduler owner 元信息。"""
+        lock_path = self._scheduler_lock_path()
+        if not lock_path.exists():
+            return {}
+        try:
+            payload = json.loads(lock_path.read_text(encoding="utf-8").strip() or "{}")
+        except Exception:
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        return {str(key): str(value) for key, value in payload.items()}
+
+    def reconcile_scheduled_jobs(self) -> int:
+        """按当前任务定义重建全部 task 类 cron 触发器。"""
+        jobs: list[CronJob] = []
+        recovered = self._recover_stale_running_tasks()
+        self._store.reload_tasks()
+        for task in self._store.list_tasks(include_disabled=True):
+            jobs.extend(self._build_task_jobs(task))
+        self._cron.replace_jobs_for_target_kind("task", jobs)
+        try:
+            self._last_reconciled_store_mtime_ns = self._store.store_path.stat().st_mtime_ns
+        except FileNotFoundError:
+            self._last_reconciled_store_mtime_ns = None
+        if recovered:
+            logger.info(
+                "Task reconcile recovered {} stale running task(s) before rebuilding cron jobs",
+                recovered,
+            )
+        return len(jobs)
+
+    def poll_scheduler(self) -> bool:
+        """在 owner runtime 中按需重建 task cron。"""
+        if not self._scheduler_owner:
+            return False
+        try:
+            current_mtime_ns = self._store.store_path.stat().st_mtime_ns
+        except FileNotFoundError:
+            current_mtime_ns = None
+        if current_mtime_ns == self._last_reconciled_store_mtime_ns:
+            return False
+        self.reconcile_scheduled_jobs()
+        return True
+
+    def _scheduler_lock_path(self) -> Path:
+        """返回实例级 scheduler owner 锁文件路径。"""
+        return get_logs_dir() / self.SCHEDULER_LOCK_FILE
+
+    def _resolve_global_reminder_targets(self, source_session_key: str) -> list[str]:
+        """根据当前实例运行态解析全局提醒 fanout 目标。"""
+        targets: list[str] = []
+        source_channel = source_session_key.split(":", 1)[0] if ":" in source_session_key else source_session_key
+
+        if source_channel == "cli":
+            targets.append("cli")
+
+        try:
+            channel_state_path = get_logs_dir() / "channels-service.json"
+            if channel_state_path.exists():
+                import json
+
+                payload = json.loads(channel_state_path.read_text(encoding="utf-8"))
+                owner = str(payload.get("owner") or "").strip()
+                if owner:
+                    targets.append(owner)
+        except Exception:
+            pass
+
+        try:
+            remote_state_path = get_logs_dir() / "remote-service.json"
+            if remote_state_path.exists():
+                import json
+
+                payload = json.loads(remote_state_path.read_text(encoding="utf-8"))
+                if int(payload.get("pid") or 0) > 0:
+                    targets.append("remote")
+        except Exception:
+            pass
+
+        return sorted(set(targets))
+
+    def enqueue_global_reminder(self, *, task_id: str, session_id: str, content: str) -> bool:
+        """把任务结果写入实例级全局提醒队列。"""
+        targets = self._resolve_global_reminder_targets(session_id)
+        delivery = self._reminders.enqueue(
+            task_id=task_id,
+            session_id=session_id,
+            content=content,
+            targets=targets,
+        )
+        if delivery is None:
+            logger.warning(
+                "Global reminder skipped: task_id={} session_id={} owner={} reason=no_targets",
+                task_id,
+                session_id,
+                self._scheduler_owner_name,
+            )
+            return False
+        logger.info(
+            "Global reminder enqueued: task_id={} session_id={} owner={} targets={}",
+            task_id,
+            session_id,
+            self._scheduler_owner_name,
+            ",".join(targets),
+        )
+        return delivery is not None
+
+    def list_pending_reminders(self, consumer: str):
+        """列出当前 consumer 尚未发送的提醒。"""
+        return self._reminders.list_pending(consumer)
+
+    def mark_reminder_delivered(self, delivery_id: str, consumer: str) -> bool:
+        """标记当前 consumer 已完成提醒投递。"""
+        return self._reminders.mark_delivered(delivery_id, consumer)
+
+    def start_scheduler(self) -> bool:
+        """尝试成为当前实例的 scheduler owner。"""
+        lock_path = self._scheduler_lock_path()
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        handle = lock_path.open("a+", encoding="utf-8")
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            handle.close()
+            self._scheduler_owner = False
+            logger.warning(
+                "Task scheduler owner already exists for instance; current runtime stays in follower mode"
+            )
+            return False
+        handle.seek(0)
+        handle.truncate()
+        handle.write(
+            json.dumps(
+                {
+                    "owner": self._scheduler_owner_name,
+                    "acquired_at_ms": _now_ms(),
+                    "bus": self._loop.bus.__class__.__name__,
+                },
+                ensure_ascii=False,
+            )
+        )
+        handle.write("\n")
+        handle.flush()
+        self._scheduler_lock_handle = handle
+        self._scheduler_owner = True
+        self.reconcile_scheduled_jobs()
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            logger.info("Task scheduler owner acquired without active event loop; defer cron start")
+            return True
+        self._cron.start()
+        logger.info("Task scheduler owner acquired for current instance")
+        return True
+
+    async def stop_scheduler(self) -> None:
+        """停止当前 runtime 的 scheduler owner 状态。"""
+        if self._scheduler_owner:
+            await self._cron.stop()
+        handle = self._scheduler_lock_handle
+        self._scheduler_lock_handle = None
+        self._scheduler_owner = False
+        if handle is not None:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            finally:
+                handle.close()
+
+    @property
+    def scheduler_owner(self) -> bool:
+        """返回当前 runtime 是否持有 scheduler owner。"""
+        return self._scheduler_owner
+
     def create_task(
         self,
         *,
@@ -169,6 +465,8 @@ class TaskRunner:
         source_session_key: str,
         channel: str,
         chat_id: str,
+        target_channel: str | None = None,
+        target_chat_id: str | None = None,
     ) -> Task:
         """创建并注册一条任务。"""
         normalized = instruction.strip()
@@ -183,8 +481,8 @@ class TaskRunner:
             enabled=True,
             payload=TaskPayload(instruction=normalized),
             source_session_key=source_session_key,
-            target_channel=channel,
-            target_chat_id=chat_id,
+            target_channel=target_channel or channel,
+            target_chat_id=target_chat_id or chat_id,
             schedule=schedule,
             turn=turn,
             deliver_at_ms=schedule.at_ms if execution_type == "prepared_delivery" else None,
@@ -204,6 +502,8 @@ class TaskRunner:
         source_session_key: str,
         channel: str,
         chat_id: str,
+        target_channel: str | None = None,
+        target_chat_id: str | None = None,
     ) -> Task:
         """创建一次性延时任务。"""
         return self.create_task(
@@ -214,6 +514,8 @@ class TaskRunner:
             source_session_key=source_session_key,
             channel=channel,
             chat_id=chat_id,
+            target_channel=target_channel,
+            target_chat_id=target_chat_id,
         )
 
     def create_at_task(
@@ -224,6 +526,8 @@ class TaskRunner:
         source_session_key: str,
         channel: str,
         chat_id: str,
+        target_channel: str | None = None,
+        target_chat_id: str | None = None,
     ) -> Task:
         """创建一次性定点任务。"""
         return self.create_task(
@@ -234,6 +538,8 @@ class TaskRunner:
             source_session_key=source_session_key,
             channel=channel,
             chat_id=chat_id,
+            target_channel=target_channel,
+            target_chat_id=target_chat_id,
         )
 
     def create_daily_task(
@@ -244,6 +550,8 @@ class TaskRunner:
         source_session_key: str,
         channel: str,
         chat_id: str,
+        target_channel: str | None = None,
+        target_chat_id: str | None = None,
     ) -> Task:
         """创建每天固定时间重复任务。"""
         return self.create_task(
@@ -254,6 +562,8 @@ class TaskRunner:
             source_session_key=source_session_key,
             channel=channel,
             chat_id=chat_id,
+            target_channel=target_channel,
+            target_chat_id=target_chat_id,
         )
 
     def create_every_task(
@@ -264,6 +574,8 @@ class TaskRunner:
         source_session_key: str,
         channel: str,
         chat_id: str,
+        target_channel: str | None = None,
+        target_chat_id: str | None = None,
     ) -> Task:
         """创建固定间隔重复任务。"""
         return self.create_task(
@@ -274,6 +586,8 @@ class TaskRunner:
             source_session_key=source_session_key,
             channel=channel,
             chat_id=chat_id,
+            target_channel=target_channel,
+            target_chat_id=target_chat_id,
         )
 
     def update_task(
@@ -419,7 +733,7 @@ class TaskRunner:
         *,
         stage: TaskPhase,
         extra_note: str | None = None,
-        write_to_main_session: bool,
+        use_source_session_history: bool,
     ) -> str:
         """通过 agent 主链路执行一次任务。"""
         prompt = self.build_task_trigger_message(
@@ -437,17 +751,20 @@ class TaskRunner:
         if callable(setter):
             token = setter(True)
         try:
-            result = await self._loop.process_direct_result(
-                prompt,
-                session_key=(
-                    task.source_session_key
-                    if write_to_main_session
-                    else f"task:{task.id}"
+            task_session_key = f"task:{task.id}:{stage}"
+            result = await asyncio.wait_for(
+                self._loop.process_direct_result(
+                    prompt,
+                    session_key=task_session_key,
+                    channel=task.target_channel,
+                    chat_id=task.target_chat_id,
+                    history_session_key=(
+                        task.source_session_key if use_source_session_history else None
+                    ),
+                    on_progress=_noop_progress,
+                    persist_session=False,
                 ),
-                channel=task.target_channel,
-                chat_id=task.target_chat_id,
-                on_progress=_noop_progress,
-                persist_session=write_to_main_session,
+                timeout=self._task_execution_timeout_seconds,
             )
         finally:
             resetter = getattr(task_tool, "reset_task_context", None)
@@ -473,31 +790,84 @@ class TaskRunner:
         task.run.status = "running"
         task.run.error = None
         self._store.update_task(task)
+        logger.info(
+            "Task execution started: task_id={} session_id={} target_channel={} owner={} phase=run",
+            task.id,
+            task.source_session_key,
+            task.target_channel,
+            self._scheduler_owner_name,
+        )
         try:
             final_text = await self._run_agent_task(
                 task,
                 stage="run",
-                write_to_main_session=True,
+                use_source_session_history=True,
             )
             if not final_text:
                 raise ValueError("empty task response")
-            await self._delivery.deliver(
+            enqueued = self.enqueue_global_reminder(
                 task_id=task.id,
-                channel=task.target_channel,
-                chat_id=task.target_chat_id,
+                session_id=task.source_session_key,
                 content=final_text,
             )
             task.run.status = "delivered"
             task.run.error = None
+            logger.info(
+                "Task execution finished: task_id={} session_id={} target_channel={} owner={} phase=run reminder_enqueued={}",
+                task.id,
+                task.source_session_key,
+                task.target_channel,
+                self._scheduler_owner_name,
+                enqueued,
+            )
+        except asyncio.CancelledError:
+            task.run.status = "failed"
+            task.run.error = "task execution cancelled by scheduler owner interruption"
+            task.run.last_run_at_ms = _now_ms()
+            task.run.run_count += 1
+            self._store.update_task(task)
+            logger.warning(
+                "Task execution cancelled: task_id={} session_id={} target_channel={} owner={} phase=run",
+                task.id,
+                task.source_session_key,
+                task.target_channel,
+                self._scheduler_owner_name,
+            )
+            raise
+        except asyncio.TimeoutError:
+            task.run.status = "failed"
+            task.run.error = (
+                f"task execution timed out after {self._task_execution_timeout_seconds}s"
+            )
+            self.enqueue_global_reminder(
+                task_id=task.id,
+                session_id=task.source_session_key,
+                content=f"自动任务执行失败：{task.run.error}",
+            )
+            logger.warning(
+                "Task execution timed out: task_id={} session_id={} target_channel={} owner={} phase=run timeout_seconds={}",
+                task.id,
+                task.source_session_key,
+                task.target_channel,
+                self._scheduler_owner_name,
+                self._task_execution_timeout_seconds,
+            )
         except Exception as exc:
             logger.exception("Task {} failed during scheduled execution", task.id)
             task.run.status = "failed"
             task.run.error = str(exc)
-            await self._delivery.deliver(
+            self.enqueue_global_reminder(
                 task_id=task.id,
-                channel=task.target_channel,
-                chat_id=task.target_chat_id,
+                session_id=task.source_session_key,
                 content=f"自动任务执行失败：{exc}",
+            )
+            logger.warning(
+                "Task execution failed: task_id={} session_id={} target_channel={} owner={} phase=run error={}",
+                task.id,
+                task.source_session_key,
+                task.target_channel,
+                self._scheduler_owner_name,
+                exc,
             )
         task.run.last_run_at_ms = _now_ms()
         task.run.run_count += 1
@@ -513,7 +883,7 @@ class TaskRunner:
                 task,
                 stage="prepare",
                 extra_note="现在先准备最终要发送的内容，稍后到点时会直接投递这份结果。",
-                write_to_main_session=False,
+                use_source_session_history=True,
             )
             if not prepared:
                 raise ValueError("empty prepared result")
@@ -533,31 +903,96 @@ class TaskRunner:
         """执行 prepared_delivery 的最终投递阶段。"""
         task.run.status = "running"
         self._store.update_task(task)
-        content = str(task.run.prepared_result or "").strip()
-        if not content:
-            content = await self._run_agent_task(
-                task,
-                stage="deliver",
-                extra_note=(
-                    "预先准备结果缺失或失败，请现在直接生成一条最终发给用户的任务结果，"
-                    "并在内容里自然说明这是补救发送。"
-                ),
-                write_to_main_session=True,
-            )
-            if not content:
-                content = "自动任务准备失败，这次没能生成可发送的内容。"
-        await self._delivery.deliver(
-            task_id=task.id,
-            channel=task.target_channel,
-            chat_id=task.target_chat_id,
-            content=content,
+        logger.info(
+            "Task execution started: task_id={} session_id={} target_channel={} owner={} phase=deliver",
+            task.id,
+            task.source_session_key,
+            task.target_channel,
+            self._scheduler_owner_name,
         )
-        task.run.status = "delivered"
+        content = str(task.run.prepared_result or "").strip()
+        try:
+            if not content:
+                content = await self._run_agent_task(
+                    task,
+                    stage="deliver",
+                    extra_note=(
+                        "预先准备结果缺失或失败，请现在直接生成一条最终发给用户的任务结果，"
+                        "并在内容里自然说明这是补救发送。"
+                    ),
+                    use_source_session_history=True,
+                )
+                if not content:
+                    content = "自动任务准备失败，这次没能生成可发送的内容。"
+            enqueued = self.enqueue_global_reminder(
+                task_id=task.id,
+                session_id=task.source_session_key,
+                content=content,
+            )
+            task.run.status = "delivered"
+            task.run.error = None
+            logger.info(
+                "Task execution finished: task_id={} session_id={} target_channel={} owner={} phase=deliver reminder_enqueued={}",
+                task.id,
+                task.source_session_key,
+                task.target_channel,
+                self._scheduler_owner_name,
+                enqueued,
+            )
+        except asyncio.CancelledError:
+            task.run.status = "failed"
+            task.run.error = "task execution cancelled by scheduler owner interruption"
+            task.run.last_run_at_ms = _now_ms()
+            task.run.run_count += 1
+            task.run.prepared_result = None
+            task.run.prepared_at_ms = None
+            self._store.update_task(task)
+            logger.warning(
+                "Task execution cancelled: task_id={} session_id={} target_channel={} owner={} phase=deliver",
+                task.id,
+                task.source_session_key,
+                task.target_channel,
+                self._scheduler_owner_name,
+            )
+            raise
+        except asyncio.TimeoutError:
+            task.run.status = "failed"
+            task.run.error = (
+                f"task execution timed out after {self._task_execution_timeout_seconds}s"
+            )
+            self.enqueue_global_reminder(
+                task_id=task.id,
+                session_id=task.source_session_key,
+                content=f"自动任务执行失败：{task.run.error}",
+            )
+            logger.warning(
+                "Task execution timed out: task_id={} session_id={} target_channel={} owner={} phase=deliver timeout_seconds={}",
+                task.id,
+                task.source_session_key,
+                task.target_channel,
+                self._scheduler_owner_name,
+                self._task_execution_timeout_seconds,
+            )
+        except Exception as exc:
+            task.run.status = "failed"
+            task.run.error = str(exc)
+            self.enqueue_global_reminder(
+                task_id=task.id,
+                session_id=task.source_session_key,
+                content=f"自动任务执行失败：{exc}",
+            )
+            logger.warning(
+                "Task execution failed: task_id={} session_id={} target_channel={} owner={} phase=deliver error={}",
+                task.id,
+                task.source_session_key,
+                task.target_channel,
+                self._scheduler_owner_name,
+                exc,
+            )
         task.run.last_run_at_ms = _now_ms()
         task.run.run_count += 1
         task.run.prepared_result = None
         task.run.prepared_at_ms = None
-        task.run.error = None
         self._disable_task_if_exhausted(task)
 
     async def run_trigger(self, job: CronJob) -> None:

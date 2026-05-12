@@ -14,6 +14,7 @@ import typer
 from loguru import logger
 
 from nomi.channel.service.runtime import SingleChannelRunner
+from nomi.channel.registry import get_active_channel_kind
 from nomi.channel.service.state import (
     cleanup_stale_service_files,
     ensure_runtime_not_occupied,
@@ -159,7 +160,10 @@ async def run_active_channel_foreground(loaded_config, runtime_factory) -> None:
     pid_path = get_service_pid_path()
     state_path = get_service_state_path()
     log_path = get_service_log_path()
-    runtime = runtime_factory(loaded_config)
+    runtime = runtime_factory(
+        loaded_config,
+        reminder_consumer=str(get_active_channel_kind(loaded_config) or "").strip() or None,
+    )
     runner = SingleChannelRunner(loaded_config, runtime)
     try:
         await runtime.start()

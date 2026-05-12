@@ -28,14 +28,15 @@ class RemoteBridge:
         metadata = dict(message.metadata or {})
         session_id = str(metadata.get("_session_id") or f"{message.channel}:{message.chat_id}")
         if metadata.get("_task_delivery_id"):
-            await self._hub.broadcast_to_session(
-                session_id,
-                build_task_delivered_event(
-                    session_id=session_id,
-                    task_id=str(metadata.get("_task_delivery_id")),
-                    content=message.content,
-                ),
+            payload = build_task_delivered_event(
+                session_id=session_id,
+                task_id=str(metadata.get("_task_delivery_id")),
+                content=message.content,
             )
+            if metadata.get("_global_reminder_broadcast"):
+                await self._hub.broadcast_all(payload)
+            else:
+                await self._hub.broadcast_to_session(session_id, payload)
             return
         if metadata.get("_tool_transition"):
             await self._hub.broadcast_to_session(

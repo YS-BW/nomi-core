@@ -53,6 +53,11 @@ class TaskStore:
         if not self._tasks:
             self._tasks = self._load_tasks()
 
+    def reload_tasks(self) -> list[Task]:
+        """强制从磁盘重载任务列表。"""
+        self._tasks = self._load_tasks()
+        return list(self._tasks)
+
     def list_tasks(self, include_disabled: bool = False) -> list[Task]:
         """列出当前任务。"""
         self._ensure_loaded()

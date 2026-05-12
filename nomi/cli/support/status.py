@@ -14,7 +14,9 @@ from nomi.config.instance import (
     list_instance_contexts,
 )
 from nomi.config.loader import get_config_path, load_config, resolve_config_env_vars
+from nomi.config.paths import get_logs_dir
 from nomi.remote.service.state import build_remote_status_snapshot
+from nomi.tasks.runner import TaskRunner
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +49,9 @@ def build_status_rows(
         workspace = loaded.workspace_path
         channel_snapshot = build_channel_status_snapshot(loaded)
         remote_snapshot = build_remote_status_snapshot(loaded)
+        scheduler_info = TaskRunner.__new__(TaskRunner).read_scheduler_owner_info()
+        scheduler_owner = scheduler_info.get("owner", "-")
+        scheduler_active = "yes" if scheduler_info else "no"
         instance_label = format_instance_name(instance or DEFAULT_INSTANCE_NAME)
         return [
             StatusRow("Instance", instance_label, "当前命令绑定的实例名"),
@@ -59,6 +64,8 @@ def build_status_rows(
             StatusRow("Provider", loaded.agents.defaults.provider, "当前默认模型提供方"),
             StatusRow("Model", loaded.agents.defaults.model, "当前默认对话模型"),
             StatusRow("Timezone", loaded.agents.defaults.timezone, "agent 默认使用的时区"),
+            StatusRow("Task Scheduler Owner", scheduler_owner, "当前实例 task scheduler owner"),
+            StatusRow("Task Scheduler Active", scheduler_active, "当前是否已有 task scheduler owner"),
             StatusRow(
                 "Channel Enabled",
                 "yes" if channel_snapshot.enabled else "no",
@@ -122,12 +129,14 @@ def build_instance_service_rows() -> list[dict[str, str]]:
             config = resolve_config_env_vars(load_config(get_config_path()))
             channel_snapshot = build_channel_status_snapshot(config)
             remote_snapshot = build_remote_status_snapshot(config)
+            scheduler_info = TaskRunner.__new__(TaskRunner).read_scheduler_owner_info()
             channel_kind = get_active_channel_kind(config)
             logged_in = channel_has_login_state(config, channel_kind) if channel_kind else False
             rows.append(
                 {
                     "instance": format_instance_name(context.name),
                     "root": format_home_path(context.root),
+                    "scheduler": scheduler_info.get("owner", "-"),
                     "channel": (
                         f"{channel_snapshot.service_state}"
                         + (f" pid={channel_snapshot.pid}" if channel_snapshot.pid else "")

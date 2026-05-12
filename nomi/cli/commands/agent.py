@@ -71,7 +71,7 @@ def register_agent_command(app: typer.Typer) -> None:
         else:
             logger.disable("nomi")
 
-        runtime = make_runtime(loaded_config)
+        runtime = make_runtime(loaded_config, reminder_consumer="cli")
 
         restart_notice = consume_restart_notice_from_env()
         if restart_notice and should_show_cli_restart_notice(restart_notice, session_id):

@@ -79,6 +79,7 @@ class NomiRuntime:
         provider_builder: Callable[[Config], LLMProvider] | None = None,
         bus_factory: Callable[[], MessageBus] | None = None,
         agent_loop_factory: Callable[..., AgentLoop] | None = None,
+        reminder_consumer: str | None = None,
     ) -> "NomiRuntime":
         """从配置对象装配一份完整 runtime。
 
@@ -101,6 +102,7 @@ class NomiRuntime:
             bus=bus,
             provider_builder=resolved_provider_builder,
             agent_loop_factory=resolved_agent_loop_factory,
+            reminder_consumer=reminder_consumer,
         )
         return cls(
             RuntimeState(
@@ -1045,6 +1047,7 @@ class NomiRuntime:
         bus: MessageBus,
         provider_builder: Callable[[Config], LLMProvider],
         agent_loop_factory: Callable[..., AgentLoop],
+        reminder_consumer: str | None = None,
     ) -> RuntimeComponents:
         """按给定配置和复用总线构造一套可替换的 runtime 部件。"""
         try:
@@ -1070,6 +1073,8 @@ class NomiRuntime:
             timezone=defaults.timezone,
             unified_session=defaults.unified_session,
             idle_compact_after_minutes=defaults.idle_compact_after_minutes,
+            reminder_consumer=reminder_consumer,
+            config=config,
         )
         return RuntimeComponents(
             provider=provider,

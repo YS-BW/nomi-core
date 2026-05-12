@@ -954,3 +954,48 @@ async def test_remote_server_skill_upload_and_install() -> None:
             assert snapshot["sidebar"]["skills"][0]["name"] == "demo-skill"
     finally:
         await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_remote_task_delivery_broadcasts_global_reminder_to_all_clients() -> None:
+    config = Config()
+    config.remote.enabled = True
+    config.remote.host = "127.0.0.1"
+    config.remote.port = 8882
+    config.remote.auth_token = "secret-token"
+    runtime = _FakeRuntime()
+    server = RemoteServer(config, runtime)  # type: ignore[arg-type]
+
+    await server.start()
+    try:
+        async with connect(
+            "ws://127.0.0.1:8882/ws",
+            additional_headers={"Authorization": "Bearer secret-token"},
+        ) as ws1, connect(
+            "ws://127.0.0.1:8882/ws",
+            additional_headers={"Authorization": "Bearer secret-token"},
+        ) as ws2:
+            await ws1.recv()
+            await ws2.recv()
+
+            await runtime.bus.publish_outbound(
+                OutboundMessage(
+                    channel="remote",
+                    chat_id="desktop:test",
+                    content="全局提醒",
+                    metadata={
+                        "_task_delivery_id": "task_1",
+                        "_global_reminder_broadcast": True,
+                        "_session_id": "desktop:test",
+                    },
+                )
+            )
+
+            event1 = json.loads(await ws1.recv())
+            event2 = json.loads(await ws2.recv())
+            assert event1["type"] == "task_delivered"
+            assert event2["type"] == "task_delivered"
+            assert event1["content"] == "全局提醒"
+            assert event2["task_id"] == "task_1"
+    finally:
+        await server.stop()

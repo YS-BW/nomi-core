@@ -76,6 +76,11 @@ def get_task_store_path(workspace: str | Path | None = None) -> Path:
     return get_tasks_dir(workspace) / "tasks.json"
 
 
+def get_reminder_store_path() -> Path:
+    """返回实例级全局提醒存储文件路径。"""
+    return get_runtime_subdir("tasks") / "reminders.json"
+
+
 def get_skill_usage_log_path() -> Path:
     """返回 skill 使用日志文件路径。"""
     return get_logs_dir() / "skill_usage.jsonl"

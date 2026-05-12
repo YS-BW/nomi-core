@@ -333,6 +333,7 @@ class TurnProcessor:
         self,
         msg: InboundMessage,
         session_key: str | None = None,
+        history_session_key: str | None = None,
         on_progress: Callable[[str], Awaitable[None]] | None = None,
         on_stream: Callable[[str], Awaitable[None]] | None = None,
         on_stream_end: Callable[..., Awaitable[None]] | None = None,
@@ -348,6 +349,15 @@ class TurnProcessor:
         session = loop.sessions.get_or_create(key) if persist_session else Session(key=key)
         if persist_session and self.restore_runtime_checkpoint(session):
             loop.sessions.save(session)
+
+        if not persist_session and history_session_key:
+            source_session = loop.sessions.get(history_session_key)
+            if source_session is not None:
+                session.messages = list(source_session.messages)
+                session.metadata = dict(source_session.metadata)
+                session.last_consolidated = source_session.last_consolidated
+                session.created_at = source_session.created_at
+                session.updated_at = source_session.updated_at
 
         session, pending = loop.auto_compact.prepare_session(session, key)
         interrupted_context = self.build_interrupted_runtime_context(session)

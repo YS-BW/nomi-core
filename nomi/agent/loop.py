@@ -30,7 +30,7 @@ from nomi.bus.events import InboundMessage, OutboundMessage
 from nomi.bus.queue import MessageBus
 from nomi.command import CommandContext, CommandRouter, register_builtin_commands
 from nomi.config.paths import get_cron_store_path, get_data_dir, get_skills_dir, get_task_store_path
-from nomi.config.schema import AgentDefaults
+from nomi.config.schema import AgentDefaults, Config
 from nomi.cron import CronJob, CronService
 from nomi.providers.base import LLMProvider
 from nomi.runtime.models import InterruptReason, InterruptResult
@@ -111,6 +111,8 @@ class AgentLoop:
         idle_compact_after_minutes: int = 0,
         hooks: list[AgentHook] | None = None,
         unified_session: bool = False,
+        reminder_consumer: str | None = None,
+        config: Config | None = None,
     ):
         """初始化主链路运行时依赖。"""
         from nomi.config.schema import ExecToolConfig, WebToolsConfig
@@ -119,6 +121,7 @@ class AgentLoop:
         self.bus = bus
         self.provider = provider
         self.workspace = workspace
+        self.reminder_consumer = str(reminder_consumer or "").strip() or None
         self.model = model or provider.get_default_model()
         self.max_iterations = (
             max_iterations if max_iterations is not None else defaults.max_tool_iterations
@@ -137,6 +140,7 @@ class AgentLoop:
         self.provider_retry_mode = provider_retry_mode
         self.web_config = web_config or WebToolsConfig()
         self.exec_config = exec_config or ExecToolConfig()
+        self.config = config
         self.restrict_to_workspace = restrict_to_workspace
         self._extra_hooks: list[AgentHook] = hooks or []
         self._state = LoopRuntimeState()
@@ -214,6 +218,67 @@ class AgentLoop:
         self._dispatch_runtime = DispatchRuntime(self)
         self._background = BackgroundRuntime(self)
         self.cron_service.on_job = self._run_cron_job
+
+    def _find_latest_session_for_channel(self, channel: str) -> str | None:
+        """返回指定渠道最近活跃的会话键。"""
+        normalized = str(channel or "").strip()
+        if not normalized:
+            return None
+        for item in self.sessions.list_sessions():
+            session_id = str(item.get("session_id") or item.get("key") or "").strip()
+            source = str(item.get("source") or "").strip()
+            if not session_id:
+                continue
+            if source == normalized or session_id.startswith(f"{normalized}:"):
+                return session_id
+        return None
+
+    async def poll_global_reminders(self) -> bool:
+        """按当前 runtime 身份消费实例级全局提醒。"""
+        consumer = self.reminder_consumer
+        if not consumer:
+            return False
+        published = False
+        for reminder in self.tasks.list_pending_reminders(consumer):
+            if consumer == "remote":
+                message = OutboundMessage(
+                    channel="remote",
+                    chat_id=reminder.session_id,
+                    content=reminder.content,
+                    metadata={
+                        "_task_delivery_id": reminder.task_id,
+                        "_global_reminder_broadcast": True,
+                        "_session_id": reminder.session_id,
+                    },
+                )
+            elif consumer == "cli":
+                message = OutboundMessage(
+                    channel="cli",
+                    chat_id="direct",
+                    content=reminder.content,
+                    metadata={
+                        "_task_delivery_id": reminder.task_id,
+                        "_session_id": "cli:direct",
+                    },
+                )
+            else:
+                session_id = self._find_latest_session_for_channel(consumer)
+                if session_id is None:
+                    continue
+                _channel, chat_id = session_id.split(":", 1)
+                message = OutboundMessage(
+                    channel=consumer,
+                    chat_id=chat_id,
+                    content=reminder.content,
+                    metadata={
+                        "_task_delivery_id": reminder.task_id,
+                        "_session_id": session_id,
+                    },
+                )
+            await self.bus.publish_outbound(message)
+            self.tasks.mark_reminder_delivered(reminder.id, consumer)
+            published = True
+        return published
 
     async def cancel_session_tasks(self, session_key: str) -> int:
         """取消指定会话下的活跃任务。"""
@@ -385,6 +450,7 @@ class AgentLoop:
 
     async def close_mcp(self) -> None:
         """关闭前清空后台任务并释放 MCP 连接。"""
+        await self.tasks.stop_scheduler()
         await self._background.close()
 
     def _schedule_background(self, coro) -> None:
@@ -399,6 +465,7 @@ class AgentLoop:
         self,
         msg: InboundMessage,
         session_key: str | None = None,
+        history_session_key: str | None = None,
         on_progress: Callable[[str], Awaitable[None]] | None = None,
         on_stream: Callable[[str], Awaitable[None]] | None = None,
         on_stream_end: Callable[..., Awaitable[None]] | None = None,
@@ -409,6 +476,7 @@ class AgentLoop:
         return await self._turns.process_message_result(
             msg,
             session_key=session_key,
+            history_session_key=history_session_key,
             on_progress=on_progress,
             on_stream=on_stream,
             on_stream_end=on_stream_end,
@@ -569,6 +637,7 @@ class AgentLoop:
         session_key: str = "cli:direct",
         channel: str = "cli",
         chat_id: str = "direct",
+        history_session_key: str | None = None,
         on_progress: Callable[[str], Awaitable[None]] | None = None,
         on_stream: Callable[[str], Awaitable[None]] | None = None,
         on_stream_end: Callable[..., Awaitable[None]] | None = None,
@@ -580,6 +649,7 @@ class AgentLoop:
             session_key=session_key,
             channel=channel,
             chat_id=chat_id,
+            history_session_key=history_session_key,
             on_progress=on_progress,
             on_stream=on_stream,
             on_stream_end=on_stream_end,

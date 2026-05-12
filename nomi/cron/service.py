@@ -44,6 +44,7 @@ class CronService:
         self._jobs: list[CronJob] = []
         self._running = False
         self._timer_task: asyncio.Task[None] | None = None
+        self._run_lock = asyncio.Lock()
 
     def _load_jobs(self) -> list[CronJob]:
         """从磁盘读取当前触发记录列表。"""
@@ -67,6 +68,24 @@ class CronService:
             json.dumps(payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+
+    def replace_jobs_for_target_kind(self, target_kind: str, jobs: list[CronJob]) -> int:
+        """按 target_kind 原子替换一组触发记录。"""
+        if not self._running and not self._jobs:
+            self._jobs = self._load_jobs()
+            self._recompute_next_runs()
+        retained = [job for job in self._jobs if job.payload.target_kind != target_kind]
+        previous_count = len(self._jobs) - len(retained)
+        self._jobs = retained + jobs
+        self._save_jobs()
+        self._arm_timer()
+        logger.info(
+            "Cron: replaced {} trigger(s) for target_kind={}, new_count={}",
+            previous_count,
+            target_kind,
+            len(jobs),
+        )
+        return previous_count
 
     @staticmethod
     def _validate_timezone(tz_name: str) -> None:
@@ -181,6 +200,8 @@ class CronService:
         async def _tick() -> None:
             await asyncio.sleep(delay_ms / 1000)
             if self._running:
+                # 到点后立即清空 timer 引用，避免外部重建调度时误取消正在执行的 job。
+                self._timer_task = None
                 await self.run_due_jobs()
 
         self._timer_task = asyncio.create_task(_tick())
@@ -208,15 +229,18 @@ class CronService:
 
     async def run_due_jobs(self) -> None:
         """执行当前已经到点的触发器。"""
-        now_ms = _now_ms()
-        due_jobs = [
-            job for job in self._jobs
-            if job.enabled and job.state.next_run_at_ms is not None and job.state.next_run_at_ms <= now_ms
-        ]
-        for job in due_jobs:
-            await self._execute_job(job)
-        self._save_jobs()
-        self._arm_timer()
+        async with self._run_lock:
+            now_ms = _now_ms()
+            due_jobs = [
+                job for job in self._jobs
+                if job.enabled
+                and job.state.next_run_at_ms is not None
+                and job.state.next_run_at_ms <= now_ms
+            ]
+            for job in due_jobs:
+                await self._execute_job(job)
+            self._save_jobs()
+            self._arm_timer()
 
     async def _execute_job(self, job: CronJob) -> None:
         """执行单条触发记录并更新状态。"""
