@@ -169,6 +169,16 @@ Authorization: Bearer <remote.auth_token>
 - 运行态管理：
   - `clear_remote_runtime`
 
+当前 remote 侧的任务创建仍然只接受当前协议里已有的任务参数；
+core 内部已经把任务系统收口成：
+
+- `tasks.json` 作为任务定义真源
+- `cron/jobs.json` 作为派生调度状态
+- 同一实例下只有一个 runtime 持有 task scheduler owner
+- 任务最终结果改为写入实例级共享提醒队列，再由各入口各自消费
+
+remote 现在负责创建任务定义，但不再默认意味着“remote 自己就是执行该任务的调度 owner”。
+
 ---
 
 ## 事件
@@ -241,6 +251,22 @@ Provider 设置当前语义固定为：
 - `error` 现在还可能带 `fields`，用于 provider 设置页的字段级校验提示
 - `apiKey` 不会明文回传；列表和状态快照只返回 `api_key_set + api_key_preview`
 - 需要清空 `apiKey` 时，desktop 应传 `clear_api_key = true`
+
+### `task_delivered` 当前语义
+
+当前 `task_delivered` 不再等价于“只回发给创建这条任务的那个 session”。
+
+当前 core 语义是：
+
+- task 到点后，scheduler owner 先把结果写入实例级共享提醒队列
+- remote runtime 作为其中一个 consumer，会把这条提醒转成 `task_delivered`
+- 如果该提醒属于实例级全局提醒 fanout，remote 会广播给当前所有已连接客户端，而不是只发给某个已绑定 session
+
+因此 desktop 侧对 `task_delivered` 的消费应该按下面原则理解：
+
+- `session_id` 仍然表示这条任务的源会话
+- 但收到事件的客户端不一定就是当初创建这条任务的那个连接
+- 这属于全局提醒语义的一部分，不是协议异常
 
 `provider_state` / `provider_list` 当前每个 provider 条目固定包含：
 

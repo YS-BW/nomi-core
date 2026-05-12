@@ -92,7 +92,8 @@ Workspace 是某个 instance root 下的 agent 工作区 📁🌍
 | `memory/MEMORY.md` | 长期事实记忆 |
 | `memory/history.jsonl` | 长期归档历史 |
 | `memory/user_profile_candidates.json` | 待确认画像候选 |
-| `cron/jobs.json` | 应用内调度任务 |
+| `cron/jobs.json` | 任务系统派生出的 cron 调度状态 |
+| `tasks/tasks.json` | 自动任务定义真源 |
 
 ---
 
@@ -107,7 +108,7 @@ Workspace 是某个 instance root 下的 agent 工作区 📁🌍
 不改变：
 
 - 记忆文件
-- cron
+- cron 派生状态
 - skills
 - bootstrap files
 
@@ -121,7 +122,7 @@ Workspace 是某个 instance root 下的 agent 工作区 📁🌍
 
 - 会话文件
 - 长期记忆
-- cron 存储
+- cron 派生状态与任务定义
 - bootstrap files
 
 所以 `--workspace` 的影响远大于 `--session`。
