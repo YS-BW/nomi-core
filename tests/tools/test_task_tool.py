@@ -352,12 +352,12 @@ async def test_scheduled_task_enqueues_global_reminder_for_running_consumers(tmp
     runner._reminders = runner._reminders.__class__(tmp_path / "tasks-runtime" / "reminders.json")
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
-    (logs_dir / "channels-service.json").write_text(
-        '{"owner":"weixin","pid":123,"mode":"foreground"}',
-        encoding="utf-8",
-    )
-    (logs_dir / "remote-service.json").write_text(
-        '{"pid":456,"mode":"foreground"}',
+    (logs_dir / "runtime-service.json").write_text(
+        (
+            '{"pid":456,"mode":"foreground",'
+            '"remote":{"running":true},'
+            '"channel":{"running":true,"kind":"weixin"}}'
+        ),
         encoding="utf-8",
     )
 
@@ -410,6 +410,7 @@ async def test_loop_poll_global_reminders_routes_to_channel_latest_session(tmp_p
     runner._reminders = runner._reminders.__class__(tmp_path / "tasks-runtime" / "reminders.json")
     loop = runner._loop
     loop.reminder_consumer = "weixin"
+    loop.reminder_consumers = {"weixin"}
     loop.bus = MessageBus()
     loop.tasks = runner
     loop.sessions = SessionManager(tmp_path / "session-workspace")

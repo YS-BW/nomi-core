@@ -1,33 +1,26 @@
-"""`nomi channel` 命令组。"""
+"""`nomi channel` 配置命令组。"""
 
 from __future__ import annotations
 
-import typer
-from loguru import logger
+from typing import Literal
 
-from nomi.channel.registry import get_active_channel_kind
-from nomi.channel.service.state import validate_active_channel_enabled
-from nomi.channel.service.usecases import (
-    login_active_channel,
-    restart_channel_service,
-    run_channel_foreground,
-    serve_channel_internal,
-    start_channel_service,
-    stop_channel_service,
-    tail_channel_service_log,
-)
+import typer
+
+from nomi.channel.registry import channel_has_login_state, get_active_channel_kind, get_channel_spec
+from nomi.channel.service.usecases import login_active_channel
+from nomi.cli.render import console
 from nomi.cli.support.config import (
     instance_option,
     instance_root_option,
     load_runtime_config,
 )
-from nomi.cli.support.runtime_factory import make_runtime
-from nomi.utils.workspace import sync_workspace_templates
+from nomi.config.loader import get_config_path, save_config
+from nomi.runtime.service.state import build_runtime_status_snapshot
 
 
 def register_channel_command(app: typer.Typer) -> None:
     """注册 `channel` 命令组。"""
-    channel_app = typer.Typer(help="Manage external channel service")
+    channel_app = typer.Typer(help="Manage external channel adapter configuration")
 
     @channel_app.callback(invoke_without_command=True)
     def channel_group(ctx: typer.Context) -> None:
@@ -36,6 +29,46 @@ def register_channel_command(app: typer.Typer) -> None:
             return
         typer.echo(ctx.get_help())
         raise typer.Exit(0)
+
+    @channel_app.command("enable")
+    def enable(
+        kind: Literal["weixin"] = typer.Argument(..., help="Channel kind"),
+        config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+        instance: str | None = instance_option(),
+        instance_root: str | None = instance_root_option(),
+    ) -> None:
+        """启用指定 channel adapter 配置。"""
+        loaded_config = load_runtime_config(
+            config,
+            None,
+            instance=instance,
+            instance_root=instance_root,
+            silent=True,
+        )
+        get_channel_spec(kind)
+        loaded_config.channel.kind = kind
+        save_config(loaded_config, get_config_path())
+        console.print(f"[green]✓[/green] channel adapter 已启用：{kind}")
+        console.print("运行 `nomi instance restart` 使配置生效。")
+
+    @channel_app.command("disable")
+    def disable(
+        config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+        instance: str | None = instance_option(),
+        instance_root: str | None = instance_root_option(),
+    ) -> None:
+        """禁用当前 channel adapter 配置。"""
+        loaded_config = load_runtime_config(
+            config,
+            None,
+            instance=instance,
+            instance_root=instance_root,
+            silent=True,
+        )
+        loaded_config.channel.kind = ""
+        save_config(loaded_config, get_config_path())
+        console.print("[green]✓[/green] channel adapter 已禁用")
+        console.print("运行 `nomi instance restart` 使配置生效。")
 
     @channel_app.command("login")
     def login(
@@ -55,109 +88,33 @@ def register_channel_command(app: typer.Typer) -> None:
         kind = get_active_channel_kind(loaded_config)
         if not kind:
             raise typer.BadParameter(
-                "当前未启用任何 channel。\n请先在配置中设置 `channel.kind`。"
+                "当前未启用任何 channel。\n请先运行：nomi channel enable weixin"
             )
-        validate_active_channel_enabled(loaded_config)
         success = login_active_channel(loaded_config, force=force)
         if not success:
             raise typer.Exit(1)
 
-    @channel_app.command("run")
-    def run(
-        workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    @channel_app.command("status")
+    def status(
         config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
         instance: str | None = instance_option(),
         instance_root: str | None = instance_root_option(),
     ) -> None:
-        """以前台方式运行当前启用的 channel，并默认打印日志。"""
+        """显示 channel adapter 状态。"""
         loaded_config = load_runtime_config(
             config,
-            workspace,
+            None,
             instance=instance,
             instance_root=instance_root,
             silent=True,
         )
-        sync_workspace_templates(loaded_config.workspace_path, silent=True)
-        logger.enable("nomi")
-        run_channel_foreground(loaded_config, make_runtime)
-
-    @channel_app.command("_serve_internal", hidden=True)
-    def serve_internal(
-        workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
-        config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
-        instance: str | None = instance_option(),
-        instance_root: str | None = instance_root_option(),
-    ) -> None:
-        """后台 service 专用入口，绕过外层互斥检查。"""
-        loaded_config = load_runtime_config(
-            config,
-            workspace,
-            instance=instance,
-            instance_root=instance_root,
-            silent=True,
-        )
-        sync_workspace_templates(loaded_config.workspace_path, silent=True)
-        logger.enable("nomi")
-        serve_channel_internal(loaded_config, make_runtime)
-
-    @channel_app.command("start")
-    def start(
-        workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
-        config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
-        instance: str | None = instance_option(),
-        instance_root: str | None = instance_root_option(),
-    ) -> None:
-        """后台启动当前启用的 channel service。"""
-        loaded_config = load_runtime_config(
-            config,
-            workspace,
-            instance=instance,
-            instance_root=instance_root,
-            silent=True,
-        )
-        start_channel_service(config, workspace, loaded_config, instance=instance, instance_root=instance_root)
-
-    @channel_app.command("log")
-    def log(
-        instance: str | None = instance_option(),
-        instance_root: str | None = instance_root_option(),
-        config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
-    ) -> None:
-        """实时展示后台 channel service 日志，Ctrl+C 退出但不影响后台。"""
-        load_runtime_config(config, None, instance=instance, instance_root=instance_root, silent=True)
-        tail_channel_service_log()
-
-    @channel_app.command("stop")
-    def stop(
-        instance: str | None = instance_option(),
-        instance_root: str | None = instance_root_option(),
-        config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
-    ) -> None:
-        """停止后台 channel service。"""
-        loaded_config = load_runtime_config(config, None, instance=instance, instance_root=instance_root, silent=True)
-        stop_channel_service(loaded_config)
-
-    @channel_app.command("restart")
-    def restart(
-        workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
-        config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
-        instance: str | None = instance_option(),
-        instance_root: str | None = instance_root_option(),
-    ) -> None:
-        """重启后台 channel service；未运行时则直接启动。"""
-        loaded_config = load_runtime_config(
-            config,
-            workspace,
-            instance=instance,
-            instance_root=instance_root,
-            silent=True,
-        )
-        restart_channel_service(
-            config,
-            workspace,
-            loaded_config,
-            instance=instance,
-            instance_root=instance_root,
-        )
+        snapshot = build_runtime_status_snapshot(loaded_config)
+        kind = snapshot.channel_kind or "-"
+        logged_in = channel_has_login_state(loaded_config, kind) if kind != "-" else False
+        console.print(f"enabled: {'yes' if snapshot.channel_enabled else 'no'}")
+        console.print(f"kind: {kind}")
+        console.print(f"logged_in: {'yes' if logged_in else 'no'}")
+        console.print(f"running: {'yes' if snapshot.channel_running else 'no'}")
+        console.print(f"runtime: {snapshot.service_state}")
 
     app.add_typer(channel_app, name="channel")

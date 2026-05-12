@@ -122,6 +122,9 @@ class AgentLoop:
         self.provider = provider
         self.workspace = workspace
         self.reminder_consumer = str(reminder_consumer or "").strip() or None
+        self.reminder_consumers: set[str] = set()
+        if self.reminder_consumer:
+            self.reminder_consumers.add(self.reminder_consumer)
         self.model = model or provider.get_default_model()
         self.max_iterations = (
             max_iterations if max_iterations is not None else defaults.max_tool_iterations
@@ -234,10 +237,17 @@ class AgentLoop:
         return None
 
     async def poll_global_reminders(self) -> bool:
-        """按当前 runtime 身份消费实例级全局提醒。"""
-        consumer = self.reminder_consumer
-        if not consumer:
+        """按当前 runtime 挂载入口消费实例级全局提醒。"""
+        consumers = sorted(self.reminder_consumers)
+        if not consumers:
             return False
+        published = False
+        for consumer in consumers:
+            published = await AgentLoop._poll_global_reminders_for_consumer(self, consumer) or published
+        return published
+
+    async def _poll_global_reminders_for_consumer(self, consumer: str) -> bool:
+        """按单个 consumer 投递尚未发送的全局提醒。"""
         published = False
         for reminder in self.tasks.list_pending_reminders(consumer):
             if consumer == "remote":
@@ -279,6 +289,16 @@ class AgentLoop:
             self.tasks.mark_reminder_delivered(reminder.id, consumer)
             published = True
         return published
+
+    def set_reminder_consumers(self, consumers: list[str] | tuple[str, ...] | set[str]) -> None:
+        """设置当前 runtime 已挂载的提醒消费入口。"""
+        self.reminder_consumers = {
+            str(consumer or "").strip()
+            for consumer in consumers
+            if str(consumer or "").strip()
+        }
+        self.reminder_consumer = next(iter(sorted(self.reminder_consumers)), None)
+        self.tasks.set_scheduler_owner_name("runtime")
 
     async def cancel_session_tasks(self, session_key: str) -> int:
         """取消指定会话下的活跃任务。"""

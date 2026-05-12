@@ -125,7 +125,8 @@ nomi/
 - `agent/loop_runtime/`：分发、并发控制、后台运行态
 - `agent/memory/`：记忆、Dream、用户画像
 - `agent/tools/`：默认工具与 MCP
-- `channel/service/`：channel service 的状态、前后台运行、usecase
+- `runtime/service/`：实例级 runtime service 的状态、前后台运行
+- `channel/service/`：channel 登录 stub 与 adapter runner
 - `channel/adapters/weixin/`：微信平台协议 owner
 
 ---

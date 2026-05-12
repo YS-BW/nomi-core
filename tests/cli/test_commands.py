@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
-import os
 import re
 import shutil
-import signal
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -19,9 +16,9 @@ from nomi.bus.events import OutboundMessage
 from nomi.cli.app import app
 from nomi.cli.onboard import _try_auto_fill_context_window
 from nomi.cli.support.runtime_factory import make_provider
-from nomi.remote.service.state import RemoteStatusSnapshot
 from nomi.config.schema import Config
 from nomi.providers.factory.registry import find_by_name
+from nomi.runtime.service.state import RuntimeStatusSnapshot
 
 runner = CliRunner()
 
@@ -563,13 +560,13 @@ def test_channel_without_subcommand_shows_help() -> None:
 
     assert result.exit_code == 0
     stripped = _strip_ansi(result.stdout)
-    assert "Manage external channel service" in stripped
+    assert "Manage external channel adapter configuration" in stripped
+    assert "enable" in stripped
+    assert "disable" in stripped
     assert "login" in stripped
-    assert "run" in stripped
-    assert "start" in stripped
-    assert "log" in stripped
-    assert "restart" in stripped
-    assert "stop" in stripped
+    assert "status" in stripped
+    assert "start" not in stripped
+    assert "stop" not in stripped
 
 
 def test_instance_without_subcommand_shows_help() -> None:
@@ -584,473 +581,166 @@ def test_instance_without_subcommand_shows_help() -> None:
     assert "inspect" in stripped
     assert "remove" in stripped
     assert "services" in stripped
+    assert "start" in stripped
+    assert "stop" in stripped
+    assert "restart" in stripped
+    assert "log" in stripped
 
 
-def test_channel_run_starts_channel_manager_with_logs(monkeypatch, tmp_path) -> None:
-    """channel run 应复用 runtime 和单实例 runner 启动当前启用的微信 channel。"""
-    loaded_config = Config()
-    loaded_config.channel.kind = "weixin"
-    state_dir = tmp_path / "weixin"
-    state_dir.mkdir(parents=True)
-    (state_dir / "account.json").write_text("{}", encoding="utf-8")
-    loaded_config.channel.weixin.state_dir = str(state_dir)
-    events: list[str] = []
-
-    class _FakeRuntime:
-        async def start(self) -> None:
-            events.append("runtime.start")
-
-        async def close(self) -> None:
-            events.append("runtime.close")
-
-    class _FakeRunner:
-        captured_config = None
-
-        def __init__(self, config, runtime) -> None:
-            del runtime
-            type(self).captured_config = config
-
-        async def start(self) -> None:
-            events.append("runner.start")
-
-        async def wait(self) -> None:
-            events.append("runner.wait")
-
-        async def stop(self) -> None:
-            events.append("runner.stop")
-
-    async def _fake_run_active_channel_foreground(config, runtime_factory):
-        runtime = runtime_factory(config)
-        runner = _FakeRunner(config, runtime)
-        await runtime.start()
-        await runner.start()
-        try:
-            await runner.wait()
-        finally:
-            await runner.stop()
-            await runtime.close()
-
-    monkeypatch.setattr("nomi.cli.commands.channel.load_runtime_config", lambda *_args, **_kwargs: loaded_config)
-    monkeypatch.setattr("nomi.cli.commands.channel.sync_workspace_templates", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("nomi.cli.commands.channel.make_runtime", lambda *_args, **_kwargs: _FakeRuntime())
-    monkeypatch.setattr(
-        "nomi.cli.commands.channel.run_channel_foreground",
-        lambda config, runtime_factory: asyncio.run(_fake_run_active_channel_foreground(config, runtime_factory)),
-    )
-    monkeypatch.setattr("nomi.cli.commands.channel.logger.enable", lambda *_args, **_kwargs: events.append("logger.enable"))
-
-    result = runner.invoke(app, ["channel", "run"])
-
-    assert result.exit_code == 0
-    assert events == [
-        "logger.enable",
-        "runtime.start",
-        "runner.start",
-        "runner.wait",
-        "runner.stop",
-        "runtime.close",
-    ]
-    assert _FakeRunner.captured_config.channel.kind == "weixin"
-
-
-def test_channel_run_rejects_when_service_is_already_running(monkeypatch) -> None:
-    """后台已运行时，channel run 应拒绝再起前台实例。"""
+def test_channel_enable_updates_config(monkeypatch) -> None:
+    """channel enable 只更新配置，不启动独立 service。"""
     config = Config()
-    config.channel.kind = "weixin"
+    saved: dict[str, object] = {}
+
     monkeypatch.setattr("nomi.cli.commands.channel.load_runtime_config", lambda *_args, **_kwargs: config)
     monkeypatch.setattr(
-        "nomi.cli.commands.channel.run_channel_foreground",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            typer.BadParameter(
-                "channel service 已被 weixin 占用，pid=2468。\n请先执行 `nomi channel stop`，再继续启动新的 channel。"
-            )
-        ),
+        "nomi.cli.commands.channel.save_config",
+        lambda saved_config, path: saved.update({"config": saved_config, "path": path}),
     )
+    monkeypatch.setattr("nomi.cli.commands.channel.get_config_path", lambda: Path("/tmp/config.json"))
 
-    result = runner.invoke(app, ["channel", "run"])
-
-    assert result.exit_code == 2
-    stripped = _strip_ansi(result.stdout + result.stderr)
-    assert "channel service 已被 weixin 占用" in stripped
-    assert "nomi channel stop" in stripped
-
-
-def test_channel_run_requires_login_state(monkeypatch, tmp_path) -> None:
-    """channel run 在没有登录态时，应直接给出明确提示。"""
-    loaded_config = Config()
-    loaded_config.channel.kind = "weixin"
-    loaded_config.channel.weixin.state_dir = str(tmp_path / "weixin")
-
-    monkeypatch.setattr("nomi.cli.commands.channel.load_runtime_config", lambda *_args, **_kwargs: loaded_config)
-    monkeypatch.setattr("nomi.cli.commands.channel.sync_workspace_templates", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        "nomi.cli.commands.channel.run_channel_foreground",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            typer.BadParameter(
-                "weixin channel 已启用，但未找到可用登录态。\n请先运行：nomi channel login"
-            )
-        ),
-    )
-
-    result = runner.invoke(app, ["channel", "run"])
-
-    assert result.exit_code == 2
-    stripped = _strip_ansi(result.stdout + result.stderr)
-    assert "weixin channel 已启用，但未找到可用登录态" in stripped
-    assert "nomi channel login" in stripped
-
-
-def test_channel_run_warns_when_default_config_file_is_missing(monkeypatch, tmp_path: Path) -> None:
-    """channel run 在默认配置文件缺失时应提示先运行 onboard。"""
-    loaded_config = Config()
-    loaded_config.channel.kind = "weixin"
-    state_dir = tmp_path / "weixin"
-    state_dir.mkdir(parents=True)
-    (state_dir / "account.json").write_text("{}", encoding="utf-8")
-    loaded_config.channel.weixin.state_dir = str(state_dir)
-    missing_config = tmp_path / "missing-config.json"
-
-    class _FakeRuntime:
-        async def start(self) -> None:
-            return None
-
-        async def close(self) -> None:
-            return None
-
-    async def _fake_run_active_channel_foreground(_config, runtime_factory) -> None:
-        runtime = runtime_factory(_config)
-        await runtime.start()
-        await runtime.close()
-
-    monkeypatch.setattr("nomi.cli.support.config.get_config_path", lambda: missing_config)
-    monkeypatch.setattr("nomi.cli.support.config.load_config", lambda _path=None: loaded_config)
-    monkeypatch.setattr("nomi.cli.support.config.resolve_config_env_vars", lambda config: config)
-    monkeypatch.setattr("nomi.cli.commands.channel.sync_workspace_templates", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("nomi.cli.commands.channel.make_runtime", lambda *_args, **_kwargs: _FakeRuntime())
-    monkeypatch.setattr(
-        "nomi.cli.commands.channel.run_channel_foreground",
-        lambda config, runtime_factory: asyncio.run(_fake_run_active_channel_foreground(config, runtime_factory)),
-    )
-    monkeypatch.setattr("nomi.cli.commands.channel.logger.enable", lambda *_args, **_kwargs: None)
-
-    result = runner.invoke(app, ["channel", "run"])
+    result = runner.invoke(app, ["channel", "enable", "weixin"])
 
     assert result.exit_code == 0
-    stripped = _strip_ansi(result.stdout)
-    assert "未找到配置文件" in stripped
-    assert "nomi onboard" in stripped
+    assert config.channel.kind == "weixin"
+    assert saved["config"] is config
+    assert "instance restart" in _strip_ansi(result.stdout)
 
 
-def test_channel_run_requires_enabled_channel(monkeypatch) -> None:
-    """未启用 channel 时应直接失败退出。"""
-    loaded_config = Config()
+def test_channel_disable_updates_config(monkeypatch) -> None:
+    """channel disable 只关闭配置里的 active channel。"""
+    config = Config()
+    config.channel.kind = "weixin"
+    saved: dict[str, object] = {}
 
-    monkeypatch.setattr("nomi.cli.commands.channel.load_runtime_config", lambda *_args, **_kwargs: loaded_config)
-    monkeypatch.setattr("nomi.cli.commands.channel.sync_workspace_templates", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("nomi.cli.commands.channel.load_runtime_config", lambda *_args, **_kwargs: config)
     monkeypatch.setattr(
-        "nomi.cli.commands.channel.run_channel_foreground",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(typer.BadParameter("当前未启用任何 channel。")),
+        "nomi.cli.commands.channel.save_config",
+        lambda saved_config, path: saved.update({"config": saved_config, "path": path}),
     )
+    monkeypatch.setattr("nomi.cli.commands.channel.get_config_path", lambda: Path("/tmp/config.json"))
 
-    result = runner.invoke(app, ["channel", "run"])
+    result = runner.invoke(app, ["channel", "disable"])
+
+    assert result.exit_code == 0
+    assert config.channel.kind == ""
+    assert saved["config"] is config
+    assert "instance restart" in _strip_ansi(result.stdout)
+
+
+def test_channel_login_requires_enabled_channel(monkeypatch) -> None:
+    """channel login 在未启用 channel 时提示先启用。"""
+    monkeypatch.setattr("nomi.cli.commands.channel.load_runtime_config", lambda *_args, **_kwargs: Config())
+
+    result = runner.invoke(app, ["channel", "login"])
 
     assert result.exit_code == 2
     stripped = _strip_ansi(result.stdout + result.stderr)
-    assert "当前未启用任何 channel" in stripped
+    assert "nomi channel enable weixin" in stripped
 
 
-def test_channel_start_spawns_background_process(monkeypatch, tmp_path: Path) -> None:
-    """channel start 预检通过后应写 pid 并后台启动。"""
-    loaded_config = Config()
-    loaded_config.channel.kind = "weixin"
-    weixin_dir = tmp_path / "weixin"
-    weixin_dir.mkdir(parents=True)
-    (weixin_dir / "account.json").write_text("{}", encoding="utf-8")
-    loaded_config.channel.weixin.state_dir = str(weixin_dir)
-    pid_path = tmp_path / "channels-service.pid"
-    log_path = tmp_path / "channels-service.log"
-    state_path = tmp_path / "channels-service.json"
+def test_instance_start_spawns_runtime_service(monkeypatch, tmp_path: Path) -> None:
+    """instance start 应启动统一 runtime service。"""
+    config = Config()
     captured: dict[str, object] = {}
 
-    class _FakeProcess:
-        pid = 43210
-
-        @staticmethod
-        def poll():
-            return None
-
-    def _fake_popen(command, **kwargs):
-        captured["command"] = command
-        captured["kwargs"] = kwargs
-        return _FakeProcess()
-
-    monkeypatch.setattr("nomi.cli.commands.channel.load_runtime_config", lambda *_args, **_kwargs: loaded_config)
+    monkeypatch.setattr("nomi.cli.commands.instance.load_runtime_config", lambda *_args, **_kwargs: config)
+    monkeypatch.setattr("nomi.cli.commands.instance.sync_workspace_templates", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
-        "nomi.channel.service.runner.get_service_state",
-        lambda *_args, **_kwargs: __import__("types").SimpleNamespace(
-            state="stopped",
-            pid=None,
-            pid_path=pid_path,
-            log_path=log_path,
-            owner="weixin",
-            state_path=state_path,
-        ),
-    )
-    monkeypatch.setattr("nomi.channel.service.runner.get_service_pid_path", lambda: pid_path)
-    monkeypatch.setattr("nomi.channel.service.runner.get_service_log_path", lambda: log_path)
-    monkeypatch.setattr("nomi.channel.service.runner.get_service_state_path", lambda: state_path)
-    monkeypatch.setattr("nomi.channel.service.runner.get_logs_dir", lambda: tmp_path)
-    monkeypatch.setattr("nomi.channel.service.runner.subprocess.Popen", _fake_popen)
-    monkeypatch.setattr(
-        "nomi.channel.service.runner.wait_for_service_registration",
-        lambda **_kwargs: {"owner": "weixin", "pid": 43210, "mode": "background"},
-    )
-
-    result = runner.invoke(app, ["channel", "start"])
-
-    assert result.exit_code == 0
-    assert pid_path.read_text(encoding="utf-8") == "43210"
-    assert captured["command"][:4] == [os.sys.executable, "-m", "nomi", "channel"]
-    assert captured["command"][4] == "_serve_internal"
-    assert "日志文件" in result.stdout
-
-
-def test_channel_start_passes_instance_flag_to_service(monkeypatch, tmp_path: Path) -> None:
-    """channel start 应把实例参数透传给后台 service。"""
-    loaded_config = Config()
-    loaded_config.channel.kind = "weixin"
-    weixin_dir = tmp_path / "weixin"
-    weixin_dir.mkdir(parents=True)
-    (weixin_dir / "account.json").write_text("{}", encoding="utf-8")
-    loaded_config.channel.weixin.state_dir = str(weixin_dir)
-    captured: dict[str, object] = {}
-
-    monkeypatch.setattr("nomi.cli.commands.channel.load_runtime_config", lambda *_args, **_kwargs: loaded_config)
-    monkeypatch.setattr(
-        "nomi.cli.commands.channel.start_channel_service",
-        lambda config, workspace, loaded, **kwargs: captured.update(
-            {"config": config, "workspace": workspace, "loaded": loaded, **kwargs}
+        "nomi.cli.commands.instance.start_background_service",
+        lambda config_arg, workspace, loaded, **kwargs: captured.update(
+            {"config_arg": config_arg, "workspace": workspace, "loaded": loaded, **kwargs}
         ),
     )
 
-    result = runner.invoke(app, ["channel", "start", "--instance", "team-a"])
+    result = runner.invoke(app, ["instance", "start", "team-a", "--workspace", str(tmp_path)])
 
     assert result.exit_code == 0
+    assert captured["loaded"] is config
+    assert captured["workspace"] == str(tmp_path)
     assert captured["instance"] == "team-a"
-    assert captured["instance_root"] is None
 
 
-def test_channel_start_fails_when_child_exits_before_register(monkeypatch, tmp_path: Path) -> None:
-    """channel start 只有在子进程完成注册后才应回报成功。"""
-    loaded_config = Config()
-    loaded_config.channel.kind = "weixin"
-    weixin_dir = tmp_path / "weixin"
-    weixin_dir.mkdir(parents=True)
-    (weixin_dir / "account.json").write_text("{}", encoding="utf-8")
-    loaded_config.channel.weixin.state_dir = str(weixin_dir)
-    pid_path = tmp_path / "channels-service.pid"
-    log_path = tmp_path / "channels-service.log"
-    state_path = tmp_path / "channels-service.json"
-
-    class _FakeProcess:
-        pid = 43210
-
-        @staticmethod
-        def poll():
-            return 1
-
-    monkeypatch.setattr("nomi.cli.commands.channel.load_runtime_config", lambda *_args, **_kwargs: loaded_config)
-    monkeypatch.setattr(
-        "nomi.channel.service.runner.get_service_state",
-        lambda *_args, **_kwargs: __import__("types").SimpleNamespace(
-            state="stopped",
-            pid=None,
-            pid_path=pid_path,
-            log_path=log_path,
-            owner="weixin",
-            state_path=state_path,
-        ),
-    )
-    monkeypatch.setattr("nomi.channel.service.runner.get_service_pid_path", lambda: pid_path)
-    monkeypatch.setattr("nomi.channel.service.runner.get_service_log_path", lambda: log_path)
-    monkeypatch.setattr("nomi.channel.service.runner.get_service_state_path", lambda: state_path)
-    monkeypatch.setattr("nomi.channel.service.runner.get_logs_dir", lambda: tmp_path)
-    monkeypatch.setattr("nomi.channel.service.runner.subprocess.Popen", lambda *_args, **_kwargs: _FakeProcess())
-    monkeypatch.setattr("nomi.channel.service.runner.wait_for_service_registration", lambda **_kwargs: None)
-
-    result = runner.invoke(app, ["channel", "start"])
-
-    assert result.exit_code == 2
-    stripped = _strip_ansi(result.stdout + result.stderr)
-    assert "channel service 启动失败" in stripped
-    assert not pid_path.exists()
-    assert not state_path.exists()
-
-
-def test_channel_start_requires_login_state(monkeypatch, tmp_path: Path) -> None:
-    """channel start 遇到缺微信登录态时应直接失败。"""
-    loaded_config = Config()
-    loaded_config.channel.kind = "weixin"
-    loaded_config.channel.weixin.state_dir = str(tmp_path / "weixin")
-
-    monkeypatch.setattr("nomi.cli.commands.channel.load_runtime_config", lambda *_args, **_kwargs: loaded_config)
-    monkeypatch.setattr(
-        "nomi.cli.commands.channel.start_channel_service",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            typer.BadParameter("weixin channel 已启用，但未找到可用登录态。")
-        ),
-    )
-
-    result = runner.invoke(app, ["channel", "start"])
-
-    assert result.exit_code == 2
-    stripped = _strip_ansi(result.stdout + result.stderr)
-    assert "weixin channel 已启用，但未找到可用登录态" in stripped
-
-
-def test_channel_start_reports_running_instance(monkeypatch) -> None:
-    """channel start 遇到已存活实例时不应重复启动。"""
+def test_instance_restart_spawns_runtime_service(monkeypatch) -> None:
+    """instance restart 应走统一 runtime service 重启入口。"""
     config = Config()
-    config.channel.kind = "weixin"
-    monkeypatch.setattr("nomi.cli.commands.channel.load_runtime_config", lambda *_args, **_kwargs: config)
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr("nomi.cli.commands.instance.load_runtime_config", lambda *_args, **_kwargs: config)
+    monkeypatch.setattr("nomi.cli.commands.instance.sync_workspace_templates", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
-        "nomi.channel.service.runner.get_service_state",
-        lambda *_args, **_kwargs: __import__("types").SimpleNamespace(state="running", pid=2468, pid_path=Path("/tmp/fake.pid"), log_path=Path("/tmp/fake.log"), owner="weixin"),
+        "nomi.cli.commands.instance.restart_background_service",
+        lambda config_arg, workspace, loaded, **kwargs: captured.update(
+            {"config_arg": config_arg, "workspace": workspace, "loaded": loaded, **kwargs}
+        ),
     )
 
-    result = runner.invoke(app, ["channel", "start"])
+    result = runner.invoke(app, ["instance", "restart", "--instance", "team-a"])
 
     assert result.exit_code == 0
-    assert "已被 weixin 占用" in result.stdout
+    assert captured["loaded"] is config
+    assert captured["instance"] == "team-a"
 
 
-def test_get_channel_service_state_uses_registered_state_file(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
-    """service 状态应优先由注册文件驱动，而不是扫描进程命令行。"""
-    pid_path = tmp_path / "channels-service.pid"
-    state_path = tmp_path / "channels-service.json"
-    state_path.write_text(
-        json.dumps({"owner": "weixin", "pid": 33479, "mode": "background"}),
-        encoding="utf-8",
-    )
+def test_instance_stop_stops_runtime_service(monkeypatch) -> None:
+    """instance stop 应停止统一 runtime service。"""
+    config = Config()
+    called: dict[str, object] = {}
 
-    monkeypatch.setattr("nomi.channel.service.state.get_service_pid_path", lambda: pid_path)
-    monkeypatch.setattr("nomi.channel.service.state.get_service_state_path", lambda: state_path)
-    monkeypatch.setattr("nomi.channel.service.state.is_process_alive", lambda pid: pid == 33479)
-
-    from nomi.channel.service.state import get_service_state
-
-    state = get_service_state()
-    assert state.state == "running"
-    assert state.pid == 33479
-    assert state.owner == "weixin"
-
-
-def test_channel_log_follows_existing_log_file(monkeypatch, tmp_path: Path) -> None:
-    """channel log 应从现有日志文件实时输出。"""
-    log_path = tmp_path / "channels-service.log"
-    log_path.write_text("existing line\n", encoding="utf-8")
-
-    monkeypatch.setattr("nomi.channel.service.usecases.get_service_log_path", lambda: log_path)
-
-    calls = {"count": 0}
-
-    def _fake_sleep(_seconds: float) -> None:
-        calls["count"] += 1
-        raise KeyboardInterrupt
-
-    monkeypatch.setattr("nomi.channel.service.runner.time.sleep", _fake_sleep)
-
-    result = runner.invoke(app, ["channel", "log"])
-
-    assert result.exit_code == 0
-
-
-def test_channel_log_requires_existing_log_file(monkeypatch, tmp_path: Path) -> None:
-    """channel log 在日志文件不存在时应直接报错。"""
-    log_path = tmp_path / "missing.log"
-    monkeypatch.setattr("nomi.channel.service.usecases.get_service_log_path", lambda: log_path)
-
-    result = runner.invoke(app, ["channel", "log"])
-
-    assert result.exit_code == 2
-    stripped = _strip_ansi(result.stdout + result.stderr)
-    assert "日志文件不存在" in stripped
-
-
-def test_channel_stop_terminates_running_process(monkeypatch, tmp_path: Path) -> None:
-    """channel stop 应终止存活进程并清理 pid 文件。"""
-    pid_path = tmp_path / "channels-service.pid"
-    pid_path.write_text("2468", encoding="utf-8")
-    seen: dict[str, object] = {}
-
+    monkeypatch.setattr("nomi.cli.commands.instance.load_runtime_config", lambda *_args, **_kwargs: config)
     monkeypatch.setattr(
-        "nomi.channel.service.runner.get_service_state",
-        lambda *_args, **_kwargs: __import__("types").SimpleNamespace(state="running", pid=2468, pid_path=pid_path, log_path=Path("/tmp/fake.log"), owner="weixin", state_path=tmp_path / "channels-service.json"),
+        "nomi.cli.commands.instance.stop_background_service",
+        lambda loaded: called.update({"loaded": loaded}),
     )
-    monkeypatch.setattr("nomi.channel.service.runner.wait_for_process_exit", lambda pid, timeout_seconds: True)
-    monkeypatch.setattr("nomi.channel.service.runner.os.kill", lambda pid, sig: seen.update({"pid": pid, "sig": sig}))
 
-    result = runner.invoke(app, ["channel", "stop"])
+    result = runner.invoke(app, ["instance", "stop", "default"])
 
     assert result.exit_code == 0
-    assert seen == {"pid": 2468, "sig": signal.SIGTERM}
-    assert not pid_path.exists()
+    assert called["loaded"] is config
 
 
-def test_channel_stop_cleans_stale_pid(monkeypatch, tmp_path: Path) -> None:
-    """channel stop 遇到 stale pid 时应清理并提示。"""
-    pid_path = tmp_path / "channels-service.pid"
-    pid_path.write_text("9999", encoding="utf-8")
+def test_remote_enable_updates_config_and_generates_token(monkeypatch) -> None:
+    """remote enable 只更新配置和 token。"""
+    config = Config()
+    saved: dict[str, object] = {}
 
+    monkeypatch.setattr("nomi.cli.commands.remote.load_runtime_config", lambda *_args, **_kwargs: config)
     monkeypatch.setattr(
-        "nomi.channel.service.runner.get_service_state",
-        lambda *_args, **_kwargs: __import__("types").SimpleNamespace(state="stale", pid=9999, pid_path=pid_path, log_path=Path("/tmp/fake.log"), owner="weixin", state_path=tmp_path / "channels-service.json"),
+        "nomi.cli.commands.remote.save_config",
+        lambda saved_config, path: saved.update({"config": saved_config, "path": path}),
     )
+    monkeypatch.setattr("nomi.cli.commands.remote.get_config_path", lambda: Path("/tmp/config.json"))
+    monkeypatch.setattr("nomi.cli.commands.remote._generate_remote_token", lambda: "token-1")
 
-    result = runner.invoke(app, ["channel", "stop"])
+    result = runner.invoke(app, ["remote", "enable", "--host", "0.0.0.0", "--port", "9999"])
 
     assert result.exit_code == 0
-    assert not pid_path.exists()
-    assert "已失效" in result.stdout
+    assert config.remote.enabled is True
+    assert config.remote.host == "0.0.0.0"
+    assert config.remote.port == 9999
+    assert config.remote.auth_token == "token-1"
+    assert saved["config"] is config
 
 
-def test_channel_restart_restarts_running_process(monkeypatch) -> None:
-    """channel restart 遇到运行中实例时应先停再启。"""
-    calls: list[tuple[str, object, object]] = []
+def test_remote_token_persists_when_missing(monkeypatch) -> None:
+    """remote token 缺失时应生成并保存。"""
+    config = Config()
+    saved: dict[str, object] = {}
 
-    loaded_config = Config()
-    loaded_config.channel.kind = "weixin"
-    monkeypatch.setattr("nomi.cli.commands.channel.load_runtime_config", lambda *_args, **_kwargs: loaded_config)
+    monkeypatch.setattr("nomi.cli.commands.remote.load_runtime_config", lambda *_args, **_kwargs: config)
     monkeypatch.setattr(
-        "nomi.cli.commands.channel.restart_channel_service",
-        lambda config, workspace, loaded, **_kwargs: calls.append(("restart", config, workspace)),
+        "nomi.cli.commands.remote.save_config",
+        lambda saved_config, path: saved.update({"config": saved_config, "path": path}),
     )
+    monkeypatch.setattr("nomi.cli.commands.remote.get_config_path", lambda: Path("/tmp/config.json"))
+    monkeypatch.setattr("nomi.cli.commands.remote._generate_remote_token", lambda: "token-2")
 
-    result = runner.invoke(app, ["channel", "restart"])
+    result = runner.invoke(app, ["remote", "token"])
 
     assert result.exit_code == 0
-    assert calls == [("restart", None, None)]
-
-
-def test_channel_restart_starts_when_stopped(monkeypatch) -> None:
-    """channel restart 遇到未运行实例时应直接启动。"""
-    calls: list[tuple[str, object, object]] = []
-
-    loaded_config = Config()
-    loaded_config.channel.kind = "weixin"
-    monkeypatch.setattr("nomi.cli.commands.channel.load_runtime_config", lambda *_args, **_kwargs: loaded_config)
-    monkeypatch.setattr(
-        "nomi.cli.commands.channel.restart_channel_service",
-        lambda config, workspace, loaded, **_kwargs: calls.append(("restart", config, workspace)),
-    )
-
-    result = runner.invoke(app, ["channel", "restart"])
-
-    assert result.exit_code == 0
-    assert calls == [("restart", None, None)]
+    assert "token-2" in result.stdout
+    assert config.remote.auth_token == "token-2"
+    assert saved["config"] is config
 
 
 def test_status_reports_channel_runtime_state(monkeypatch, tmp_path: Path) -> None:
@@ -1078,16 +768,22 @@ def test_status_reports_channel_runtime_state(monkeypatch, tmp_path: Path) -> No
         lambda _self: {"owner": "weixin", "acquired_at_ms": "123"},
     )
     monkeypatch.setattr(
-        "nomi.cli.support.status.build_channel_status_snapshot",
-        lambda *_args, **_kwargs: __import__("types").SimpleNamespace(
-            enabled=True,
-            owner="weixin",
+        "nomi.cli.support.status.build_runtime_status_snapshot",
+        lambda *_args, **_kwargs: RuntimeStatusSnapshot(
             running=True,
-            logged_in=True,
             uptime_text="1h 2m 3s",
-            log_path=tmp_path / "channels-service.log",
+            log_path=tmp_path / "runtime-service.log",
             pid=1357,
             service_state="running",
+            remote_enabled=False,
+            remote_running=False,
+            remote_host="127.0.0.1",
+            remote_port=8765,
+            channel_enabled=True,
+            channel_running=True,
+            channel_kind="weixin",
+            channel_logged_in=True,
+            scheduler_owner="runtime",
         ),
     )
     monkeypatch.setattr(
@@ -1107,13 +803,15 @@ def test_status_reports_channel_runtime_state(monkeypatch, tmp_path: Path) -> No
     assert "Asia/Shanghai" in stripped
     assert "Task Scheduler Owner" in stripped
     assert "Task Scheduler Active" in stripped
+    assert "Runtime Running" in stripped
+    assert "Runtime PID" in stripped
     assert "Channel Enabled" in stripped
     assert "Channel Owner" in stripped
     assert "Channel Running" in stripped
     assert "weixin" in stripped
     assert "Channel Logged In" in stripped
     assert "Channel Uptime" in stripped
-    assert "Channel Log" in stripped
+    assert "Runtime Log" in stripped
 
 
 def test_status_reports_remote_runtime_state(monkeypatch, tmp_path: Path) -> None:
@@ -1135,29 +833,22 @@ def test_status_reports_remote_runtime_state(monkeypatch, tmp_path: Path) -> Non
         lambda _self: {"owner": "remote", "acquired_at_ms": "123"},
     )
     monkeypatch.setattr(
-        "nomi.cli.support.status.build_channel_status_snapshot",
-        lambda *_args, **_kwargs: __import__("types").SimpleNamespace(
-            enabled=False,
-            owner="-",
-            running=False,
-            logged_in=False,
-            uptime_text="-",
-            log_path=tmp_path / "channels-service.log",
-            pid=None,
-            service_state="stopped",
-        ),
-    )
-    monkeypatch.setattr(
-        "nomi.cli.support.status.build_remote_status_snapshot",
-        lambda *_args, **_kwargs: RemoteStatusSnapshot(
-            enabled=True,
+        "nomi.cli.support.status.build_runtime_status_snapshot",
+        lambda *_args, **_kwargs: RuntimeStatusSnapshot(
             running=True,
             uptime_text="2h 3m 4s",
-            log_path=tmp_path / "remote-service.log",
+            log_path=tmp_path / "runtime-service.log",
             pid=2468,
             service_state="running",
-            host="127.0.0.1",
-            port=8765,
+            remote_enabled=True,
+            remote_running=True,
+            remote_host="127.0.0.1",
+            remote_port=8765,
+            channel_enabled=False,
+            channel_running=False,
+            channel_kind=None,
+            channel_logged_in=False,
+            scheduler_owner="runtime",
         ),
     )
     monkeypatch.setattr("nomi.cli.support.status.Path.home", lambda *_args, **_kwargs: tmp_path)
@@ -1175,9 +866,8 @@ def test_status_reports_remote_runtime_state(monkeypatch, tmp_path: Path) -> Non
     assert "127.0.0.1" in stripped
     assert "Remote Port" in stripped
     assert "8765" in stripped
-    assert "Remote Uptime" in stripped
-    assert "2h 3m 4s" in stripped
-    assert "Remote Log" in stripped
+    assert "Runtime Running" in stripped
+    assert "Runtime Log" in stripped
 
 
 def test_onboard_auto_fills_context_window_via_model_catalog(monkeypatch) -> None:

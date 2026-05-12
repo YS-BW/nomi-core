@@ -68,9 +68,9 @@ CLI renderer
 ### Channel 入口
 
 ```text
-nomi channel run / start
+nomi instance start
   ↓
-channel service usecase
+instance runtime service
   ↓
 NomiRuntime
   ↓
@@ -173,16 +173,14 @@ nomi/channel/
 分工：
 
 - `registry.py`：解析当前 active channel kind
-- `service/state.py`：全局 service 状态、互斥、pid/log
-- `service/runner.py`：前后台启动和 stop/restart/log
+- `service/login.py`：登录流程使用的极简 runtime stub
 - `service/runtime.py`：SingleChannelRunner + outbound 路由
 - `adapters/weixin/`：微信协议实现
 
 关键代码：
 
 - registry：[nomi/channel/registry.py](../nomi/channel/registry.py#L15-L99)
-- service state：[nomi/channel/service/state.py](../nomi/channel/service/state.py#L28-L313)
-- service runner：[nomi/channel/service/runner.py](../nomi/channel/service/runner.py#L33-L178)
+- runtime runner：[nomi/channel/service/runtime.py](../nomi/channel/service/runtime.py#L18-L127)
 
 ---
 

@@ -1,4 +1,4 @@
-"""单实例 channel service 测试。"""
+"""单实例 channel adapter runner 测试。"""
 
 from __future__ import annotations
 
@@ -120,6 +120,38 @@ async def test_single_channel_runner_routes_outbound_metadata() -> None:
 
     await runner.stop()
     assert channel.stopped is True
+
+
+@pytest.mark.asyncio
+async def test_single_channel_runner_keeps_remote_messages_available() -> None:
+    """channel runner 订阅 outbound，不应消费掉 remote 消息。"""
+    config = Config()
+    config.channel.kind = "weixin"
+    runtime = _FakeRuntime()
+    runner = SingleChannelRunner(
+        config,
+        runtime,
+        channel_class=_FakeChannel,
+    )
+    seen: list[OutboundMessage] = []
+    runtime.bus.subscribe_outbound(lambda message: seen.append(message))
+
+    await runner.start()
+    remote_message = OutboundMessage(
+        channel="remote",
+        chat_id="desktop",
+        content="remote-event",
+        metadata={},
+    )
+    await runtime.bus.publish_outbound(remote_message)
+    await asyncio.sleep(0.05)
+
+    channel = runner.channel
+    assert isinstance(channel, _FakeChannel)
+    assert channel.messages == []
+    assert seen == [remote_message]
+
+    await runner.stop()
 
 
 def test_single_channel_runner_initializes_active_channel() -> None:

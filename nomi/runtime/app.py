@@ -113,6 +113,11 @@ class NomiRuntime:
                 provider_builder=resolved_provider_builder,
                 agent_loop_factory=resolved_agent_loop_factory,
                 transcription_provider=components.transcription_provider,
+                reminder_consumers=(
+                    {str(reminder_consumer).strip()}
+                    if str(reminder_consumer or "").strip()
+                    else set()
+                ),
             )
         )
 
@@ -139,6 +144,16 @@ class NomiRuntime:
             当前 runtime 的 AgentLoop 实例。
         """
         return self.state.agent_loop
+
+    def set_reminder_consumers(self, consumers: list[str] | tuple[str, ...] | set[str]) -> None:
+        """设置当前 runtime 已挂载的全局提醒消费入口。"""
+        normalized = {
+            str(consumer or "").strip()
+            for consumer in consumers
+            if str(consumer or "").strip()
+        }
+        self.state.reminder_consumers = normalized
+        self.agent_loop.set_reminder_consumers(normalized)
 
     def interrupt_session(
         self,
@@ -589,6 +604,7 @@ class NomiRuntime:
                 bus=self.bus,
                 provider_builder=self.state.provider_builder,
                 agent_loop_factory=self.state.agent_loop_factory,
+                reminder_consumer=self._primary_reminder_consumer(),
             )
         except ActiveProviderNotConfiguredError:
             raise
@@ -603,6 +619,7 @@ class NomiRuntime:
         self.state.provider = components.provider
         self.state.transcription_provider = components.transcription_provider
         self.state.agent_loop = components.agent_loop
+        self.state.agent_loop.set_reminder_consumers(self.state.reminder_consumers or set())
 
         if was_running:
             await self.lifecycle.start()
@@ -1032,6 +1049,11 @@ class NomiRuntime:
             "env": dict(server.env),
             "headers": dict(server.headers),
         }
+
+    def _primary_reminder_consumer(self) -> str | None:
+        """返回重载 runtime 时用于构造 AgentLoop 的首个提醒 consumer。"""
+        consumers = sorted(self.state.reminder_consumers or set())
+        return consumers[0] if consumers else None
 
     async def _save_and_refresh_mcp_config(self, config: Config) -> None:
         """保存 MCP 配置并刷新当前运行态连接。"""

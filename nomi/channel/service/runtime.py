@@ -45,14 +45,14 @@ class SingleChannelRunner:
             else build_active_channel(config, runtime)
         )
         self.owner = spec.kind
-        self._dispatch_task: asyncio.Task[None] | None = None
+        self._unsubscribe_bus = None
         self._channel_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         """启动当前 channel 与 outbound dispatcher。"""
-        if self._dispatch_task is not None:
+        if self._channel_task is not None:
             return
-        self._dispatch_task = asyncio.create_task(self._dispatch_outbound())
+        self._unsubscribe_bus = self.bus.subscribe_outbound(self._handle_outbound)
         self._channel_task = asyncio.create_task(self.channel.start())
         await asyncio.sleep(0)
 
@@ -63,13 +63,9 @@ class SingleChannelRunner:
 
     async def stop(self) -> None:
         """停止当前 channel 与 dispatcher。"""
-        if self._dispatch_task is not None:
-            self._dispatch_task.cancel()
-            try:
-                await self._dispatch_task
-            except asyncio.CancelledError:
-                pass
-            self._dispatch_task = None
+        if self._unsubscribe_bus is not None:
+            self._unsubscribe_bus()
+            self._unsubscribe_bus = None
         try:
             await self.channel.stop()
         finally:
@@ -77,23 +73,17 @@ class SingleChannelRunner:
                 await asyncio.gather(self._channel_task, return_exceptions=True)
                 self._channel_task = None
 
-    async def _dispatch_outbound(self) -> None:
-        """消费 runtime.bus.outbound 并路由到当前 channel。"""
-        while True:
-            try:
-                message = await self.bus.consume_outbound()
-            except asyncio.CancelledError:
-                raise
-
-            try:
-                await self._route_message(message)
-            except Exception as exc:
-                logger.warning(
-                    "Channel {} failed to send outbound message to {}: {}",
-                    self.owner,
-                    message.chat_id,
-                    exc,
-                )
+    async def _handle_outbound(self, message: OutboundMessage) -> None:
+        """旁路订阅 runtime bus 出站消息并路由到当前 channel。"""
+        try:
+            await self._route_message(message)
+        except Exception as exc:
+            logger.warning(
+                "Channel {} failed to send outbound message to {}: {}",
+                self.owner,
+                message.chat_id,
+                exc,
+            )
 
     async def _route_message(self, message: OutboundMessage) -> None:
         """根据 metadata 选择发送路径。"""

@@ -1,103 +1,98 @@
-# Nomi 任务系统重构计划
+# Nomi 单一实例统一 Runtime 计划
 
-> 本文件替换旧版 `PLAN.md`，后续任务系统相关实现、测试、文档与验收均以这里为准。
+> 本文件记录当前 runtime 统一重构状态。后续 instance/runtime/task/channel/remote 相关实现、测试、文档与验收均以这里为准。
 
-## 1. 计划目标
+## 1. 目标语义
 
-用户要的最终产品语义固定如下：
+- `instance` 是唯一运行主体。
+- 一个 instance root 下只允许一个活跃 runtime 进程。
+- `remote` 和 `channel` 是挂载在该 runtime 上的 adapter，不再是独立 service。
+- `task / session / provider / memory / bus` 都归唯一 `NomiRuntime + AgentLoop` 持有。
+- 启动 instance 时，按配置挂载已启用 adapter。
+- 停止 instance 时，停止全部 adapter 和 runtime。
+- channel 启停是配置语义：`channel enable/disable` 后通过 `instance restart` 生效。
 
-- 任务可以从 `CLI` 创建。
-- 任务也可以从 `desktop/remote` 创建。
-- 创建入口和最终投递出口解耦。
-- 最终提醒走实例级全局投递：同一实例里所有已启动入口各自收到一份，不在当前公开接口里暴露额外 target 字段。
-- 同一个 `instance` 下，任务必须由统一调度器可靠执行。
+## 2. 当前完成状态
 
-本计划的实施顺序固定为：
+已落地：
 
-1. 先止血，修复 task/job 脱钩与无自愈。
-2. 再把任务调度从“每个 runtime 各管一份”收口成实例级单 scheduler owner。
-3. 再评估是否要继续上升到共享 runtime / instance core service。
+- 新增实例级 runtime service：
+  - `runtime-service.pid`
+  - `runtime-service.json`
+  - `runtime-service.log`
+- `nomi instance run/start/stop/restart/log/status/services` 已成为唯一进程管理入口。
+- `nomi remote` 已退回配置与凭证入口：
+  - `enable`
+  - `disable`
+  - `token`
+  - `rotate-token`
+  - `status`
+- `nomi channel` 已退回配置、登录与状态入口：
+  - `enable`
+  - `disable`
+  - `login`
+  - `status`
+- `SingleChannelRunner` 已从独占 `consume_outbound()` 改为 `subscribe_outbound()`。
+- `remote` 和 `channel` 现在可以并列订阅同一个 runtime bus。
+- `AgentLoop` 支持同一 runtime 内多个 reminder consumer。
+- task 全局提醒目标已改为读取 `runtime-service.json`。
+- `status` 和 `instance services` 已以统一 runtime 状态为准。
+- 启动统一 runtime 时会拒绝旧 remote/channel 独立 service 仍在运行的状态。
 
-## 2. 当前代码事实
+## 3. 当前固定命令面
 
-当前任务系统已经确认的结构性问题：
+进程管理只走：
 
-- `tasks.json` 保存任务定义；
-- `cron/jobs.json` 保存底层调度触发器；
-- `remote` 和 `channel` 各自启动自己的 `runtime / AgentLoop / TaskRunner / CronService`；
-- 多个 runtime 读写同一个 instance root 时，之前没有 reconcile 和单 owner 机制；
-- 任务创建入口默认绑定当前上下文；
-- 当前公开接口不需要新增显式 `target_channel / target_chat_id` 参数，提醒改为走实例级全局投递。
+- `nomi instance run [name]`
+- `nomi instance start [name]`
+- `nomi instance stop [name]`
+- `nomi instance restart [name]`
+- `nomi instance log [name]`
+- `nomi instance status [name]`
+- `nomi instance services`
 
-## 3. 当前完成状态
+remote 只做配置与凭证：
 
-### 3.1 已完成
+- `nomi remote enable`
+- `nomi remote disable`
+- `nomi remote token`
+- `nomi remote rotate-token`
+- `nomi remote status`
 
-- `tasks.json` 已收口为任务定义真源。
-- runtime 启动时，任务层会从 `tasks.json` 自愈重建全部 `target_kind == "task"` 的 cron 触发器。
-- `CronService` 已支持按 `target_kind` 原子替换一组派生 job，避免 task reconcile 时误伤非任务类 cron 记录。
-- 同一实例下已经增加单 scheduler owner 机制：
-  - 通过实例级锁文件保证同一实例只有一个 runtime 真正启动 cron 调度；
-  - 其他 runtime 保持 follower 模式，只读写任务定义，不再直接启动自己的 task cron。
-- scheduler owner 会在主循环 idle tick 中轮询 `tasks.json` 变化并重建 task cron；
-  - 因此 follower runtime 新建或修改任务后，owner runtime 能自动接管新的派生调度状态。
-- 任务结果不再只回创建端：
-  - scheduler owner 会把任务最终结果写入实例级共享提醒队列；
-  - `remote / channel / cli` 这些已启动入口会各自轮询消费属于自己的提醒副本；
-  - 因此 desktop 创建的任务，到点后可以同时出现在 desktop、微信等当前已启动入口上。
-- `prepared_delivery` 仍保持完整的 `prepare + deliver` 双阶段派生 job 语义。
-- 核心测试已补齐并通过：
-  - `tests/tools/test_task_tool.py`
-  - `tests/cron/test_cron_service.py`
-  - `tests/cli/test_runtime.py`
-  - `tests/remote/test_server.py`
+channel 只做配置、登录与状态：
 
-### 3.2 当前仍保留的限制
+- `nomi channel enable weixin`
+- `nomi channel disable`
+- `nomi channel login`
+- `nomi channel status`
 
-- 当前没有引入新的独立 scheduler service；单 owner 仍挂在现有 runtime 进程上。
-- 当前没有改 `nomi-protocol`，也没有改 desktop wire shape。
-- 当前全局提醒依赖“入口已启动且存在可投递会话”：
-  - remote 侧会广播给当前所有已连接客户端；
-  - channel 侧会投递到该渠道最近活跃的会话；
-  - CLI 侧只会投递给当前正在运行的 `nomi agent`。
+明确不再保留：
 
-## 4. 固定设计结论
+- `nomi remote run/start/stop/restart/log`
+- `nomi channel run/start/stop/restart/log`
 
-### 4.1 已经落地的设计
+## 4. 仍保留的边界
 
-- **任务定义唯一真源 = `tasks.json`**
-- `cron/jobs.json` 已降级为派生调度状态，不再和 `tasks.json` 并列当真源
-- **同一实例只能有一个 task scheduler owner**
-- `remote / channel / cli` 可以继续作为不同入口，但不再都持有 live task scheduler 真相
-- **任务结果投递改为实例级 fanout，而不是单个 target_channel/chat_id 单播**
+- 第一版不做 adapter 热插拔，配置变化通过 `nomi instance restart` 生效。
+- 第一版不改 `nomi-protocol`。
+- 第一版仍只支持一个 active channel。
+- 第一版不做自动端口分配。
+- 旧 remote/channel service state 不做迁移，只检测并拒绝与统一 runtime 同时运行。
 
-### 4.2 当前不做的事情
+## 5. 验收状态
 
-- 不做 protocol 私改
-- 不让 desktop 侧补 core 语义
-- 不开放新的 `target_channel / target_chat_id` 公共创建参数
-- 不直接上共享大 runtime
-- 不引入新的独立 instance core service 作为当前 P0
+已跑过并通过：
 
-## 5. 下一阶段
+- `uv run python -m pytest tests/cli/test_commands.py tests/channels/test_service.py tests/runtime/test_service_runner.py -q`
+- `uv run python -m pytest tests/remote/test_server.py tests/tools/test_task_tool.py tests/cron/test_cron_service.py tests/bus/test_queue.py -q`
+- `uv run python -m compileall nomi tests -q`
 
-下一阶段固定聚焦两件事：
+待做真实 smoke：
 
-1. 真实实例 smoke：
-   - 同一实例起 `remote`
-   - 同一实例起 `channel weixin`
-   - 从 CLI 或 desktop 创建任务
-   - 校验 owner runtime 能自动接管并在到点时把提醒 fanout 给所有已启动入口
-2. 文档继续收口：
-   - 明确 `tasks.json` 是真源
-   - 明确 `cron/jobs.json` 是派生状态
-   - 明确当前采用实例级单 scheduler owner，而不是共享 runtime
-
-## 6. 完成定义
-
-本计划中的一个阶段，只有同时满足下面四项才算完成：
-
-1. 代码实现完成；
-2. 对应测试已新增或更新，并且实际跑过；
-3. `docs/` 中相关文档已更新；
-4. 本文件已回写当前完成状态、剩余风险与下一阶段优先级。
+1. `nomi instance restart default`
+2. `nomi instance status default`
+3. desktop 连接 remote
+4. 微信 channel 收发
+5. desktop 创建 1 分钟提醒
+6. 到点后 desktop 和微信都收到
+7. `nomi instance services` 只显示一个 runtime pid

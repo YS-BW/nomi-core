@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 from datetime import datetime
 
 import pytest
@@ -997,5 +998,39 @@ async def test_remote_task_delivery_broadcasts_global_reminder_to_all_clients() 
             assert event2["type"] == "task_delivered"
             assert event1["content"] == "全局提醒"
             assert event2["task_id"] == "task_1"
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_remote_bridge_ignores_channel_adapter_messages() -> None:
+    config = Config()
+    config.remote.enabled = True
+    config.remote.host = "127.0.0.1"
+    config.remote.port = 8881
+    config.remote.auth_token = "secret-token"
+    runtime = _FakeRuntime()
+    server = RemoteServer(config, runtime)  # type: ignore[arg-type]
+
+    await server.start()
+    try:
+        async with connect(
+            "ws://127.0.0.1:8881/ws",
+            additional_headers={"Authorization": "Bearer secret-token"},
+        ) as websocket:
+            ready = json.loads(await websocket.recv())
+            assert ready["type"] == "ready"
+
+            await runtime.bus.publish_outbound(
+                OutboundMessage(
+                    channel="weixin",
+                    chat_id="wx-user",
+                    content="微信专属消息",
+                    metadata={"_session_id": "weixin:wx-user"},
+                )
+            )
+
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(websocket.recv(), timeout=0.1)
     finally:
         await server.stop()

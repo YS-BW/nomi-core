@@ -39,3 +39,4 @@ class RuntimeState:
     transcription_provider: QwenAsrTranscriptionProvider | None = None
     serve_task: asyncio.Task[None] | None = None
     started: bool = False
+    reminder_consumers: set[str] | None = None

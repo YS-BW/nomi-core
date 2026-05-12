@@ -9,7 +9,7 @@
 当前产品面已经收口成：
 
 - 用户只看见 `nomi channel` 👀
-- 当前只允许一个外部 channel 占用 runtime 🚦
+- 当前只允许一个 active channel 挂载到实例 runtime 🚦
 - 当前底层只实现 `weixin` 💬
 
 ---
@@ -63,9 +63,8 @@ nomi/channel/
 负责：
 
 - 解析当前 active channel
-- 管理 pid/log/state
-- 做互斥检查
-- 负责前后台启动
+- 提供登录 runtime stub
+- 运行 active channel adapter
 - 路由 outbound message
 
 ### 3. 平台实现层
@@ -113,80 +112,32 @@ nomi/channel/
 
 ---
 
-## Service State
+## 启动模型
 
-service 状态层负责这些事情：
+channel 不再是独立后台 service。
 
-- pid 文件路径
-- log 文件路径
-- state 文件路径
-- 判断进程是否还活着
-- 判断 service 是 `running / stopped / stale`
-- 启动前互斥检查
-- status 命令快照
-
-对应文件：
-
-- [nomi/channel/service/state.py](../nomi/channel/service/state.py#L28-L313)
-
-### 当前状态文件
-
-默认位置：
+当前启动链路是：
 
 ```text
-~/.nomi/logs/channels-service.pid
-~/.nomi/logs/channels-service.log
-~/.nomi/logs/channels-service.json
+nomi instance start
+  ↓
+InstanceRuntimeService
+  ↓
+NomiRuntime
+  ↓
+SingleChannelRunner
+  ↓
+WeixinChannel
 ```
 
-### 互斥规则
+channel CLI 只负责配置、登录和状态：
 
-`ensure_runtime_not_occupied()` 的当前真实语义：
+- `nomi channel enable weixin`
+- `nomi channel disable`
+- `nomi channel login`
+- `nomi channel status`
 
-- 如果是 stale，先清理失效 pid/state
-- 如果是 running，直接拒绝新的 `run/start/restart`
-- 错误提示统一指向 `nomi channel stop`
-
-见 [nomi/channel/service/state.py](../nomi/channel/service/state.py#L244-L256)。
-
----
-
-## Service Runner
-
-runner 层负责前后台运行。
-
-对应文件：
-
-- [nomi/channel/service/runner.py](../nomi/channel/service/runner.py#L33-L178)
-
-### 当前主要函数
-
-| 函数 | 作用 |
-|---|---|
-| `build_service_command()` | 构造后台子进程命令 |
-| `start_background_service()` | 启动后台 service |
-| `stop_background_service()` | 停止后台 service |
-| `restart_background_service()` | 重启后台 service |
-| `run_active_channel_foreground()` | 前台运行 active channel |
-| `follow_log_file()` | 跟随日志文件 |
-
-### 后台启动链路
-
-```text
-nomi channel start
-  ↓
-start_background_service()
-  ↓
-python -m nomi channel _serve_internal
-  ↓
-子进程注册 service state
-  ↓
-父进程确认注册成功
-  ↓
-写 pid 并输出成功信息
-```
-
-这个“等子进程注册后再算成功”的逻辑，是当前避免假成功的关键。
+配置变化通过 `nomi instance restart` 生效。
 
 ---
 
@@ -201,9 +152,8 @@ python -m nomi channel _serve_internal
 它负责：
 
 - 构造当前 active channel 实例
-- 启动 outbound dispatch task
 - 启动 channel 本身
-- 从 bus.outbound 消费消息
+- 订阅 runtime bus 的 outbound 消息
 - 根据 metadata 选择 `send_progress / send_delta / send_message`
 
 ### 当前 outbound 路由规则
@@ -241,8 +191,8 @@ python -m nomi channel _serve_internal
 这条边界现在是清楚的：
 
 - `channel/service` 不碰微信协议细节
-- `weixin` 不碰 pid / log / 互斥 / service 状态
+- `weixin` 不碰 instance runtime 的 pid / log / service 状态
 - CLI 不直接调用 adapter 内部实现
-- CLI 只调用 service usecase
+- CLI 只做配置、登录和状态入口
 
 如果以后接飞书，也应该沿着这条边界继续加，而不是把平台逻辑再塞回 CLI。

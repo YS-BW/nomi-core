@@ -26,8 +26,8 @@ class MessageBus:
 
     async def publish_outbound(self, msg: OutboundMessage) -> None:
         """发布一条出站消息。"""
-        await self.outbound.put(msg)
         if not self._outbound_subscribers:
+            await self.outbound.put(msg)
             return
         for callback in list(self._outbound_subscribers.values()):
             try:

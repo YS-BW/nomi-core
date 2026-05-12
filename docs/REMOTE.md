@@ -17,11 +17,12 @@
 
 已经落地的能力：
 
-- `nomi remote run`
-- `nomi remote start`
-- `nomi remote stop`
-- `nomi remote restart`
-- `nomi remote log`
+- `nomi remote enable`
+- `nomi remote disable`
+- `nomi remote token`
+- `nomi remote rotate-token`
+- `nomi remote status`
+- remote adapter 随 `nomi instance start/restart` 挂载
 - WebSocket 双向命令/事件协议
 - 复用当前 `session / memory / tasks / interrupt`
 - 与微信 channel 并存，不抢占它的 outbound 消费
@@ -52,21 +53,22 @@
 
 说明：
 
-- 第一次启动 `nomi remote run/start/restart` 时，如果 `remote.authToken` 为空，会自动生成一个随机 token 并写回当前配置文件
-- 后续启动只复用这个已保存 token，不会每次重新生成
-- `nomi remote start` 在“已启动 / 已运行”的提示里会直接打印当前 token，方便 desktop 侧接入
+- `nomi remote enable` 会开启 remote adapter 配置
+- `nomi remote token` 会在 token 为空时自动生成并保存
+- `nomi remote rotate-token` 会轮换 token
+- 运行中的 instance 需要 `nomi instance restart` 后才会应用 remote 配置变化
 
-启动：
+启用 remote：
 
 ```bash
-nomi remote run
+nomi remote enable
 ```
 
-后台启动：
+启动实例 runtime：
 
 ```bash
-nomi remote start
-nomi remote log
+nomi instance restart
+nomi instance log
 ```
 
 ---
@@ -177,7 +179,7 @@ core 内部已经把任务系统收口成：
 - 同一实例下只有一个 runtime 持有 task scheduler owner
 - 任务最终结果改为写入实例级共享提醒队列，再由各入口各自消费
 
-remote 现在负责创建任务定义，但不再默认意味着“remote 自己就是执行该任务的调度 owner”。
+remote 现在负责作为统一 runtime 的 WebSocket adapter 接收命令。任务执行 owner 是唯一 instance runtime。
 
 ---
 
@@ -333,7 +335,8 @@ Provider 设置当前语义固定为：
 启动方式：
 
 ```bash
-nomi remote run
+nomi remote enable
+nomi instance restart
 uv run python -m http.server 8080 -d examples/remote-client
 ```
 

@@ -83,15 +83,22 @@
 - `nomi instance create <name>`
 - `nomi instance inspect <name>`
 - `nomi instance remove <name>`
+- `nomi instance run [name]`
+- `nomi instance start [name]`
+- `nomi instance stop [name]`
+- `nomi instance restart [name]`
+- `nomi instance log [name]`
+- `nomi instance status [name]`
 - `nomi instance services`
 
-命令定义在 [nomi/cli/commands/instance.py](../nomi/cli/commands/instance.py#L1-L96)。
+命令定义在 [nomi/cli/commands/instance.py](../nomi/cli/commands/instance.py#L1-L209)。
 
 其中：
 
 - `default` 不允许删除
 - `create` 会注册实例并创建标准目录
-- `services` 会汇总所有实例的 channel/remote 服务状态
+- `start/stop/restart/log/status` 是唯一后台 runtime 管理入口
+- `services` 会汇总所有实例的 runtime 与 adapter 状态
 
 ---
 
@@ -107,19 +114,29 @@
 
 ---
 
-## Service 管理
+## Runtime Service 管理
 
-channel / remote 的后台 service 现在按实例工作：
+instance runtime service 现在是唯一后台运行主体：
 
-- `channel start/log/stop/restart --instance X`
-- `remote start/log/stop/restart --instance X`
+- `nomi instance start X`
+- `nomi instance stop X`
+- `nomi instance restart X`
+- `nomi instance log X`
 
-后台子进程命令会把实例参数继续透传下去，不再是全局语义。
+统一状态文件位于当前实例的 `logs/` 目录：
+
+```text
+runtime-service.pid
+runtime-service.json
+runtime-service.log
+```
+
+remote 和 channel 不再是独立后台 service，而是挂在同一个 runtime 进程上的 adapter。
 
 相关代码：
 
-- channel runner：[nomi/channel/service/runner.py](../nomi/channel/service/runner.py#L28-L190)
-- remote runner：[nomi/remote/service/runner.py](../nomi/remote/service/runner.py#L28-L182)
+- runtime service：[nomi/runtime/service/runner.py](../nomi/runtime/service/runner.py#L1-L254)
+- runtime state：[nomi/runtime/service/state.py](../nomi/runtime/service/state.py#L1-L306)
 
 状态展示与实例汇总在 [nomi/cli/support/status.py](../nomi/cli/support/status.py#L1-L136)。
 

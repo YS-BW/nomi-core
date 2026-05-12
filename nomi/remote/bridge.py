@@ -25,6 +25,8 @@ class RemoteBridge:
 
     async def handle_outbound(self, message: OutboundMessage) -> None:
         """把一条出站消息转换成远程事件。"""
+        if message.channel not in {"remote", "desktop"}:
+            return
         metadata = dict(message.metadata or {})
         session_id = str(metadata.get("_session_id") or f"{message.channel}:{message.chat_id}")
         if metadata.get("_task_delivery_id"):

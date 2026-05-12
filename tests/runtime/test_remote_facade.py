@@ -33,12 +33,18 @@ class _ReloadLoopStub:
         self._control = SimpleNamespace(active_tasks={}, pending_queues={})
         self.stop_calls = 0
         self.close_mcp = AsyncMock(return_value=None)
+        self.reminder_consumers: set[str] = set()
+        self.reminder_consumer: str | None = None
 
     async def run(self) -> None:
         return None
 
     def stop(self) -> None:
         self.stop_calls += 1
+
+    def set_reminder_consumers(self, consumers) -> None:
+        self.reminder_consumers = set(consumers)
+        self.reminder_consumer = next(iter(sorted(self.reminder_consumers)), None)
 
 
 @pytest.mark.asyncio
@@ -269,6 +275,7 @@ async def test_runtime_set_active_provider_and_reload_runtime(tmp_path: Path, mo
         provider_builder=lambda _config: object(),
         agent_loop_factory=_build_loop,
     )
+    runtime.set_reminder_consumers(["remote", "weixin"])
 
     changed = runtime.set_active_provider("minimax", model="MiniMax-M2.7")
     reloaded = await runtime.reload_runtime()
@@ -278,6 +285,7 @@ async def test_runtime_set_active_provider_and_reload_runtime(tmp_path: Path, mo
     assert runtime.state.config.agents.defaults.provider == "minimax"
     assert runtime.state.config.agents.defaults.model == "MiniMax-M2.7"
     assert created_loops[-1].model == "MiniMax-M2.7"
+    assert created_loops[-1].reminder_consumers == {"remote", "weixin"}
 
 
 @pytest.mark.asyncio

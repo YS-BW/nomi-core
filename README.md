@@ -235,66 +235,50 @@ nomi channel login
 
 实现见 [nomi/channel/adapters/weixin/channel.py](./nomi/channel/adapters/weixin/channel.py#L488-L546) 和 [nomi/channel/adapters/weixin/channel.py](./nomi/channel/adapters/weixin/channel.py#L547-L621)。
 
-### 前台运行
+### 启用与运行
 
 ```bash
-nomi channel run
+nomi channel enable weixin
+nomi instance restart
 ```
 
 特点：
 
-- 前台运行
-- 默认打开日志
-- 会检查当前 runtime 是否已被其它 channel service 占用
+- `channel enable` 只修改实例配置
+- `instance restart` 启动或重启唯一实例 runtime
+- 如果微信已有登录态，runtime 会挂载 weixin adapter
 
-入口在 [nomi/cli/commands/channel.py](./nomi/cli/commands/channel.py#L53-L103)。
+入口在 [nomi/cli/commands/channel.py](./nomi/cli/commands/channel.py#L1-L123)。
 
-### 后台运行
-
-```bash
-nomi channel start
-```
-
-特点：
-
-- 后台启动 channel service
-- 真正拉起的是内部隐藏入口 `nomi channel _serve_internal`
-- 启动成功前会等待子进程完成 service 注册，避免假成功
-
-实现见 [nomi/channel/service/runner.py](./nomi/channel/service/runner.py#L60-L180)。
-
-### 查看后台日志
+### 查看状态与日志
 
 ```bash
-nomi channel log
+nomi channel status
+nomi instance log
 ```
 
-这会跟随：
+统一日志文件：
 
 ```text
-~/.nomi/logs/channels-service.log
+~/.nomi/logs/runtime-service.log
 ```
 
-日志跟随逻辑在 [nomi/channel/service/runner.py](./nomi/channel/service/runner.py#L43-L59)。
-
-### 停止 / 重启
+### 停用
 
 ```bash
-nomi channel stop
-nomi channel restart
+nomi channel disable
+nomi instance restart
 ```
 
 ### 运行约束
 
 当前产品规则是：
 
-- `nomi agent` 不参与 channel 互斥
-- `nomi remote` 不属于 channel，它是独立的桌面壳服务入口
+- `instance` 是唯一后台运行主体
+- `remote` 和 `channel` 都是挂在 instance runtime 上的 adapter
+- 同一实例只允许一个 runtime 进程
 
-- `nomi channel run / start / restart` 三者全局互斥
-- 同一时刻只允许一个外部 channel service 占用 runtime
-
-互斥检查见 [nomi/channel/service/state.py](./nomi/channel/service/state.py#L244-L313)。
+状态管理见 [nomi/runtime/service/state.py](./nomi/runtime/service/state.py#L1-L306)。
 
 ---
 
@@ -315,12 +299,13 @@ nomi channel restart
 }
 ```
 
-第一次启动 `nomi remote run/start/restart` 时，如果 `authToken` 为空，会自动生成随机 token 并写回配置；后续启动会复用该 token，并在启动输出里直接显示它。
+使用 `nomi remote token` 查看或自动生成 token。remote 配置变化通过 `nomi instance restart` 生效。
 
-### 2. 启动 remote 服务
+### 2. 启动 instance runtime
 
 ```bash
-nomi remote run
+nomi remote enable
+nomi instance restart
 ```
 
 ### 3. 启动 demo 静态页

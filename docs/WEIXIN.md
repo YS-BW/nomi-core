@@ -22,9 +22,8 @@ nomi channel ...
 
 ### Service 层
 
-- usecases：[nomi/channel/service/usecases.py](../nomi/channel/service/usecases.py#L26-L74)
-- 前后台 runner：[nomi/channel/service/runner.py](../nomi/channel/service/runner.py#L33-L178)
-- service 状态：[nomi/channel/service/state.py](../nomi/channel/service/state.py#L28-L313)
+- usecases：[nomi/channel/service/usecases.py](../nomi/channel/service/usecases.py#L1-L19)
+- 登录 runtime stub：[nomi/channel/service/login.py](../nomi/channel/service/login.py#L10-L50)
 - runtime runner：[nomi/channel/service/runtime.py](../nomi/channel/service/runtime.py#L18-L127)
 
 ### 平台实现
@@ -118,79 +117,53 @@ nomi channel login
 
 ## 启动方式
 
-### 前台运行
+### 启用与运行
 
 ```bash
-nomi channel run
+nomi channel enable weixin
+nomi instance restart
 ```
 
 特点：
 
-- 前台运行
-- 默认开启日志
-- 会先做互斥检查
-- 如果当前没有登录态，会报错并提示先 `nomi channel login`
+- `channel enable` 只修改实例配置
+- `instance restart` 启动唯一实例 runtime
+- 如果当前没有登录态，runtime 会跳过 weixin adapter 并在状态里显示未运行
 
-命令入口：[nomi/cli/commands/channel.py](../nomi/cli/commands/channel.py#L53-L63)
-
-### 后台运行
-
-```bash
-nomi channel start
-```
-
-特点：
-
-- 后台子进程运行
-- 通过隐藏命令 `_serve_internal` 拉起
-- 启动时等待 service state 注册
-- 成功后才写 pid 并报告成功
-
-实现见 [nomi/channel/service/runner.py](../nomi/channel/service/runner.py#L60-L108)。
+命令入口：[nomi/cli/commands/channel.py](../nomi/cli/commands/channel.py#L1-L123)
 
 ### 停止与重启
 
 ```bash
-nomi channel stop
-nomi channel restart
+nomi channel disable
+nomi instance restart
 ```
-
-对应：
-
-- stop：[nomi/channel/service/runner.py](../nomi/channel/service/runner.py#L110-L130)
-- restart：[nomi/channel/service/runner.py](../nomi/channel/service/runner.py#L167-L174)
 
 ### 日志
 
 ```bash
-nomi channel log
+nomi instance log
 ```
 
 日志文件：
 
 ```text
-~/.nomi/logs/channels-service.log
+~/.nomi/logs/runtime-service.log
 ```
 
-路径定义在 [nomi/channel/service/state.py](../nomi/channel/service/state.py#L59-L66)。
+路径定义在 [nomi/runtime/service/state.py](../nomi/runtime/service/state.py#L53-L65)。
 
 ---
 
-## 互斥规则
+## 运行规则
 
 当前产品规则：
 
-- `nomi agent` 不参与 channel 互斥
-- `nomi channel run / start / restart` 之间全局互斥
-- 同一时刻只允许一个外部 channel service 占用 runtime
+- 一个 instance root 只允许一个实例 runtime
+- weixin 是挂在该 runtime 上的 adapter
+- channel 配置变化通过 `nomi instance restart` 生效
 
-校验逻辑在 [nomi/channel/service/state.py](../nomi/channel/service/state.py#L244-L256)。
-
-如果已有占用者，再启动会报错并提示：
-
-```text
-请先执行 `nomi channel stop`
-```
+统一 runtime 状态在 [nomi/runtime/service/state.py](../nomi/runtime/service/state.py#L1-L306)。
 
 ---
 
@@ -323,16 +296,16 @@ nomi channel log
 
 ```text
 ~/.nomi/weixin/account.json
-~/.nomi/logs/channels-service.pid
-~/.nomi/logs/channels-service.json
-~/.nomi/logs/channels-service.log
+~/.nomi/logs/runtime-service.pid
+~/.nomi/logs/runtime-service.json
+~/.nomi/logs/runtime-service.log
 ~/.nomi/media/weixin/
 ```
 
 路径来源：
 
 - 登录态：[nomi/channel/registry.py](../nomi/channel/registry.py#L80-L91)
-- service pid/log/state：[nomi/channel/service/state.py](../nomi/channel/service/state.py#L54-L66)
+- runtime pid/log/state：[nomi/runtime/service/state.py](../nomi/runtime/service/state.py#L53-L65)
 - 媒体目录：[nomi/config/paths.py](../nomi/config/paths.py#L26-L29)
 
 ---

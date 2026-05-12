@@ -1,6 +1,6 @@
 # ⚙️ Runtime
 
-`NomiRuntime` 是 CLI 和 channel 共同复用的进程内运行时入口。
+`NomiRuntime` 是实例级 runtime service 持有的唯一进程内运行时入口。
 
 它的作用不是“再套一层大框架” 🧱  
 而是把真正该统一的东西收口到一起：
@@ -113,26 +113,37 @@ Runtime 当前还暴露这些高层控制能力：
 
 ---
 
-## Runtime 和 Channel 的关系
+## Runtime 和 Instance Service 的关系
 
-当前 channel 子系统不是“另写一套 runtime”，而是复用 `NomiRuntime`。
+当前后台运行主体是 instance runtime service，不再是 remote/channel 各自启动一套 runtime。
 
 链路是：
 
 ```text
-nomi channel run/start
+nomi instance start
   ↓
 make_runtime(config)
   ↓
 NomiRuntime
   ↓
-SingleChannelRunner
+RemoteServer / SingleChannelRunner
 ```
 
 所以：
 
-- CLI 和 channel 共享同一套 agent / session / memory / provider 逻辑
-- channel 只是在外层把入站和出站接成微信
+- 同一实例只持有一套 agent / session / memory / provider / task / bus
+- remote 和 channel 只是挂载在这套 runtime 上的 adapter
+- provider reload 作用于唯一 runtime，后续 remote/channel/task 都使用同一套 provider
+
+---
+
+## Runtime 和 Channel 的关系
+
+channel 子系统只负责外部渠道适配，不再独占 runtime 的 outbound 队列。
+
+当前 `SingleChannelRunner` 通过 `bus.subscribe_outbound()` 订阅出站消息，并只处理属于自己 channel 的消息。
+
+这保证 remote 和 channel 可以并列挂在同一个 runtime bus 上。
 
 ---
 
@@ -159,7 +170,7 @@ await runtime.transcribe_audio(file_path)
 
 - prompt_toolkit 交互
 - terminal 渲染
-- channel service 的 pid / log 管理
+- instance service 的 pid / log 管理
 - 用户命令解析
 - 微信协议实现
 

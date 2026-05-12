@@ -47,7 +47,6 @@ class TaskRunner:
         self._scheduler_lock_handle = None
         self._scheduler_owner = False
         self._last_reconciled_store_mtime_ns: int | None = None
-        defaults = getattr(getattr(loop, "context", None), "timezone", None)
         self._scheduler_owner_name = (
             str(getattr(loop, "reminder_consumer", None) or "").strip() or "cli"
         )
@@ -281,6 +280,11 @@ class TaskRunner:
             "lock_path": str(self._scheduler_lock_path()),
         }
 
+    def set_scheduler_owner_name(self, owner: str) -> None:
+        """更新当前 runtime 的 scheduler owner 展示名。"""
+        normalized = str(owner or "").strip()
+        self._scheduler_owner_name = normalized or "cli"
+
     def read_scheduler_owner_info(self) -> dict[str, str]:
         """从锁文件读取 scheduler owner 元信息。"""
         lock_path = self._scheduler_lock_path()
@@ -339,25 +343,18 @@ class TaskRunner:
             targets.append("cli")
 
         try:
-            channel_state_path = get_logs_dir() / "channels-service.json"
-            if channel_state_path.exists():
+            runtime_state_path = get_logs_dir() / "runtime-service.json"
+            if runtime_state_path.exists():
                 import json
 
-                payload = json.loads(channel_state_path.read_text(encoding="utf-8"))
-                owner = str(payload.get("owner") or "").strip()
-                if owner:
-                    targets.append(owner)
-        except Exception:
-            pass
-
-        try:
-            remote_state_path = get_logs_dir() / "remote-service.json"
-            if remote_state_path.exists():
-                import json
-
-                payload = json.loads(remote_state_path.read_text(encoding="utf-8"))
-                if int(payload.get("pid") or 0) > 0:
+                payload = json.loads(runtime_state_path.read_text(encoding="utf-8"))
+                remote = payload.get("remote") if isinstance(payload.get("remote"), dict) else {}
+                channel = payload.get("channel") if isinstance(payload.get("channel"), dict) else {}
+                if remote.get("running"):
                     targets.append("remote")
+                owner = str(channel.get("kind") or "").strip()
+                if channel.get("running") and owner:
+                    targets.append(owner)
         except Exception:
             pass
 

@@ -185,38 +185,32 @@ CLI 里的 slash 命令不是交给模型，而是在进入模型前就被路由
 
 | 命令 | 说明 |
 |---|---|
+| `nomi channel enable weixin` | 启用微信 adapter 配置 |
+| `nomi channel disable` | 禁用当前 channel adapter 配置 |
 | `nomi channel login` | 当前 active channel 登录 |
-| `nomi channel run` | 前台运行 channel |
-| `nomi channel start` | 后台启动 channel service |
-| `nomi channel log` | 跟随后台日志 |
-| `nomi channel stop` | 停止后台 service |
-| `nomi channel restart` | 重启后台 service |
+| `nomi channel status` | 查看 channel adapter 状态 |
 
-隐藏入口：
-
-- `nomi channel _serve_internal`
-
-这个命令只给后台 service 自己拉起子进程时使用，不对用户暴露。
-
-`login / run / start / log / stop / restart` 现在也都支持：
+`enable / disable / login / status` 现在都支持：
 
 - `--instance`
 - `--instance-root`
 - `--config`
 
+channel 不再负责启动进程。配置变化通过 `nomi instance restart` 应用。
+
 ## `nomi remote`
 
-`remote` 是桌面壳联调和后台 remote server 的 CLI 入口。
+`remote` 是桌面壳 WebSocket adapter 的配置入口。
 
 当前子命令：
 
-- `nomi remote run`
-- `nomi remote start`
-- `nomi remote log`
-- `nomi remote stop`
-- `nomi remote restart`
+- `nomi remote enable`
+- `nomi remote disable`
+- `nomi remote token`
+- `nomi remote rotate-token`
+- `nomi remote status`
 
-这些命令同样支持实例参数，并按实例 root 读写日志、pid 和状态文件。
+remote 不再负责启动进程。真正的监听由 `nomi instance start/restart` 挂载。
 
 ---
 
@@ -230,6 +224,12 @@ CLI 里的 slash 命令不是交给模型，而是在进入模型前就被路由
 - `nomi instance create <name>`
 - `nomi instance inspect <name>`
 - `nomi instance remove <name>`
+- `nomi instance run [name]`
+- `nomi instance start [name]`
+- `nomi instance stop [name]`
+- `nomi instance restart [name]`
+- `nomi instance log [name]`
+- `nomi instance status [name]`
 - `nomi instance services`
 
 实现见 [nomi/cli/commands/instance.py](../nomi/cli/commands/instance.py#L1-L96)。
@@ -263,8 +263,9 @@ CLI 里的 slash 命令不是交给模型，而是在进入模型前就被路由
 - 当前 config
 - 当前 workspace
 - 当前默认 provider/model/timezone
-- channel service 运行状态
-- remote service 运行状态
+- 统一 runtime service 运行状态
+- remote adapter 状态
+- channel adapter 状态
 
 命令入口：[nomi/cli/commands/status.py](../nomi/cli/commands/status.py#L13-L37)  
 状态聚合：[nomi/cli/support/status.py](../nomi/cli/support/status.py#L29-L75)

@@ -190,7 +190,7 @@ skill 命令统一走：
 它不负责：
 
 - 执行模型对话
-- 管理 channel service
+- 管理 instance runtime service
 - 管理 CLI 渲染
 
 如果把业务拼装逻辑继续塞进命令层，会让 slash 命令重新变得很难维护。
