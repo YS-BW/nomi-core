@@ -12,10 +12,13 @@ import pytest
 
 from nomi.config.loader import save_config
 from nomi.config.schema import Config
+from nomi.cron.types import CronSchedule
 from nomi.runtime.app import NomiRuntime
 from nomi.runtime.errors import RuntimeReloadBusyError
 from nomi.session.errors import SessionNotFoundError
 from nomi.session.manager import SessionManager
+from nomi.tasks.models import Task, TaskPayload
+from nomi.tasks.store import TaskStore
 
 
 class _LoopStub:
@@ -245,6 +248,45 @@ def test_runtime_update_provider_can_clear_api_key(
     saved = Config.model_validate_json(config_path.read_text(encoding="utf-8"))
     assert result["settings"]["api_key_set"] is False
     assert saved.providers.custom.api_key == ""
+
+
+def test_runtime_sidebar_serializes_task_target_channels(tmp_path: Path) -> None:
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    loop_stub = _LoopStub(config.workspace_path)
+    runtime = NomiRuntime.from_config(
+        config,
+        provider_builder=lambda _config: object(),
+        agent_loop_factory=lambda **_kwargs: loop_stub,
+    )
+    task_store = TaskStore(tmp_path / "tasks" / "tasks.json")
+    task_store.create_task(
+        Task(
+            id="",
+            title="只发微信",
+            execution_type="scheduled",
+            enabled=True,
+            payload=TaskPayload(instruction="只发微信"),
+            source_session_key="desktop:test",
+            target_channel="desktop",
+            target_chat_id="test",
+            schedule=CronSchedule(kind="at", at_ms=9999999999999),
+            target_channels=["weixin"],
+        )
+    )
+    runtime.state.agent_loop = SimpleNamespace(
+        tasks=SimpleNamespace(
+            list_tasks=lambda include_disabled=True: task_store.list_tasks(
+                include_disabled=include_disabled
+            ),
+            next_run_for_task=lambda _task_id: 9999999999999,
+        ),
+        skill_registry=SimpleNamespace(scan=lambda: []),
+    )
+
+    sidebar = runtime.get_sidebar_snapshot()
+
+    assert sidebar["tasks"][0]["targetChannels"] == ["weixin"]
 
 
 @pytest.mark.asyncio

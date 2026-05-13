@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from nomi.agent.tools.base import Tool, tool_parameters
-from nomi.agent.tools.schema import IntegerSchema, StringSchema, tool_parameters_schema
+from nomi.agent.tools.schema import ArraySchema, IntegerSchema, StringSchema, tool_parameters_schema
 from nomi.tasks import TaskRunner
 
 
@@ -59,10 +59,13 @@ class _BaseTaskTool(Tool):
 
     def _format_task(self, task) -> str:
         """格式化单个任务详情。"""
+        target_channels = list(getattr(task, "target_channels", []) or [])
+        delivery = "global" if not target_channels else "only: " + ", ".join(target_channels)
         lines = [
             f"task_id: {task.id}",
             f"enabled: {task.enabled}",
             f"instruction: {task.payload.instruction}",
+            f"delivery: {delivery}",
             f"schedule kind: {self._format_schedule_kind(task)}",
             f"next run: {self._format_timestamp(self._tasks.next_run_for_task(task.id))}",
             f"run_count: {task.run.run_count}",
@@ -120,6 +123,22 @@ class _TaskContextTool(_BaseTaskTool):
             return "Error: cannot create a new task from inside a running task."
         return None
 
+    @staticmethod
+    def _normalize_target_channels(target_channels: list[str] | None) -> list[str] | None:
+        """规范化可选提醒投递目标；空值表示全局提醒。"""
+        if target_channels is None:
+            return None
+        return [str(item).strip().lower() for item in target_channels if str(item).strip()]
+
+
+TARGET_CHANNELS_SCHEMA = ArraySchema(
+    StringSchema(
+        "可选提醒投递目标。省略或传空数组表示全局提醒；传入后只投递到这些入口。",
+        enum=["cli", "remote", "weixin"],
+    ),
+    description="可选提醒投递目标列表。支持 cli、remote、weixin；省略表示全局提醒。",
+)
+
 
 @tool_parameters(
     tool_parameters_schema(
@@ -128,6 +147,7 @@ class _TaskContextTool(_BaseTaskTool):
             description="距离现在多少秒后触发",
             minimum=1,
         ),
+        target_channels=TARGET_CHANNELS_SCHEMA,
         required=["instruction", "after_seconds"],
     )
 )
@@ -149,6 +169,7 @@ class TaskCreateAfterTool(_TaskContextTool):
         *,
         instruction: str,
         after_seconds: int,
+        target_channels: list[str] | None = None,
         **kwargs: Any,
     ) -> str:
         """创建一条一次性延时任务。"""
@@ -166,6 +187,7 @@ class TaskCreateAfterTool(_TaskContextTool):
                 source_session_key=self._session_key,
                 channel=self._channel,
                 chat_id=self._chat_id,
+                target_channels=self._normalize_target_channels(target_channels),
             )
         except ValueError as exc:
             return f"Error: {exc}"
@@ -176,6 +198,7 @@ class TaskCreateAfterTool(_TaskContextTool):
     tool_parameters_schema(
         instruction=StringSchema("到点后要发给用户的话"),
         at=StringSchema("ISO 8601 本地时间字符串"),
+        target_channels=TARGET_CHANNELS_SCHEMA,
         required=["instruction", "at"],
     )
 )
@@ -197,6 +220,7 @@ class TaskCreateAtTool(_TaskContextTool):
         *,
         instruction: str,
         at: str,
+        target_channels: list[str] | None = None,
         **kwargs: Any,
     ) -> str:
         """创建一条一次性定点任务。"""
@@ -214,6 +238,7 @@ class TaskCreateAtTool(_TaskContextTool):
                 source_session_key=self._session_key,
                 channel=self._channel,
                 chat_id=self._chat_id,
+                target_channels=self._normalize_target_channels(target_channels),
             )
         except ValueError as exc:
             return f"Error: {exc}"
@@ -224,6 +249,7 @@ class TaskCreateAtTool(_TaskContextTool):
     tool_parameters_schema(
         instruction=StringSchema("到点后要发给用户的话"),
         daily_time=StringSchema("每天触发时间，格式 HH:MM"),
+        target_channels=TARGET_CHANNELS_SCHEMA,
         required=["instruction", "daily_time"],
     )
 )
@@ -245,6 +271,7 @@ class TaskCreateDailyTool(_TaskContextTool):
         *,
         instruction: str,
         daily_time: str,
+        target_channels: list[str] | None = None,
         **kwargs: Any,
     ) -> str:
         """创建一条每天固定时间重复任务。"""
@@ -262,6 +289,7 @@ class TaskCreateDailyTool(_TaskContextTool):
                 source_session_key=self._session_key,
                 channel=self._channel,
                 chat_id=self._chat_id,
+                target_channels=self._normalize_target_channels(target_channels),
             )
         except ValueError as exc:
             return f"Error: {exc}"
@@ -275,6 +303,7 @@ class TaskCreateDailyTool(_TaskContextTool):
             description="每隔多少秒执行一次",
             minimum=1,
         ),
+        target_channels=TARGET_CHANNELS_SCHEMA,
         required=["instruction", "every_seconds"],
     )
 )
@@ -296,6 +325,7 @@ class TaskCreateEveryTool(_TaskContextTool):
         *,
         instruction: str,
         every_seconds: int,
+        target_channels: list[str] | None = None,
         **kwargs: Any,
     ) -> str:
         """创建一条固定间隔重复任务。"""
@@ -313,6 +343,7 @@ class TaskCreateEveryTool(_TaskContextTool):
                 source_session_key=self._session_key,
                 channel=self._channel,
                 chat_id=self._chat_id,
+                target_channels=self._normalize_target_channels(target_channels),
             )
         except ValueError as exc:
             return f"Error: {exc}"

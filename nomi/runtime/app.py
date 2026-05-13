@@ -1032,6 +1032,7 @@ class NomiRuntime:
             "nextRunAtMs": self.agent_loop.tasks.next_run_for_task(task.id),
             "runCount": task.run.run_count,
             "status": task.run.status,
+            "targetChannels": list(getattr(task, "target_channels", []) or []),
         }
 
     @staticmethod

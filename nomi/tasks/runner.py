@@ -37,6 +37,7 @@ class TaskRunner:
     DEFAULT_PREPARE_BEFORE_MS = 10 * 60 * 1000
     DEFAULT_EXECUTION_TIMEOUT_SECONDS = 180
     SCHEDULER_LOCK_FILE = "task_scheduler.lock"
+    SUPPORTED_REMINDER_TARGETS = frozenset({"cli", "remote", "weixin"})
 
     def __init__(self, loop: "AgentLoop", store: TaskStore, cron_service: CronService) -> None:
         """初始化任务 orchestrator。"""
@@ -74,6 +75,21 @@ class TaskRunner:
     def _build_title(self, instruction: str) -> str:
         """按固定规则生成任务展示名。"""
         return instruction[:30].strip()
+
+    def normalize_target_channels(self, channels: list[str] | tuple[str, ...] | None) -> list[str]:
+        """规范化显式提醒投递目标；空列表表示全局提醒。"""
+        if not channels:
+            return []
+        normalized: list[str] = []
+        for item in channels:
+            channel = str(item or "").strip().lower()
+            if not channel:
+                continue
+            if channel not in self.SUPPORTED_REMINDER_TARGETS:
+                allowed = ", ".join(sorted(self.SUPPORTED_REMINDER_TARGETS))
+                raise ValueError(f"unsupported target channel: {channel}. Supported: {allowed}")
+            normalized.append(channel)
+        return sorted(set(normalized))
 
     def _format_daily_cron(self, daily_time: str) -> str:
         """把 HH:MM 转成 cron 表达式。"""
@@ -334,8 +350,14 @@ class TaskRunner:
         """返回实例级 scheduler owner 锁文件路径。"""
         return get_logs_dir() / self.SCHEDULER_LOCK_FILE
 
-    def _resolve_global_reminder_targets(self, source_session_key: str) -> list[str]:
+    def _resolve_global_reminder_targets(
+        self,
+        source_session_key: str,
+        *,
+        target_channels: list[str] | None = None,
+    ) -> list[str]:
         """根据当前实例运行态解析全局提醒 fanout 目标。"""
+        explicit_targets = self.normalize_target_channels(target_channels)
         targets: list[str] = []
         source_channel = source_session_key.split(":", 1)[0] if ":" in source_session_key else source_session_key
 
@@ -358,11 +380,24 @@ class TaskRunner:
         except Exception:
             pass
 
-        return sorted(set(targets))
+        running_targets = sorted(set(targets))
+        if explicit_targets:
+            return explicit_targets
+        return running_targets
 
-    def enqueue_global_reminder(self, *, task_id: str, session_id: str, content: str) -> bool:
+    def enqueue_global_reminder(
+        self,
+        *,
+        task_id: str,
+        session_id: str,
+        content: str,
+        target_channels: list[str] | None = None,
+    ) -> bool:
         """把任务结果写入实例级全局提醒队列。"""
-        targets = self._resolve_global_reminder_targets(session_id)
+        targets = self._resolve_global_reminder_targets(
+            session_id,
+            target_channels=target_channels,
+        )
         delivery = self._reminders.enqueue(
             task_id=task_id,
             session_id=session_id,
@@ -371,10 +406,11 @@ class TaskRunner:
         )
         if delivery is None:
             logger.warning(
-                "Global reminder skipped: task_id={} session_id={} owner={} reason=no_targets",
+                "Global reminder skipped: task_id={} session_id={} owner={} reason=no_targets requested_targets={}",
                 task_id,
                 session_id,
                 self._scheduler_owner_name,
+                ",".join(target_channels or []),
             )
             return False
         logger.info(
@@ -464,6 +500,7 @@ class TaskRunner:
         chat_id: str,
         target_channel: str | None = None,
         target_chat_id: str | None = None,
+        target_channels: list[str] | tuple[str, ...] | None = None,
     ) -> Task:
         """创建并注册一条任务。"""
         normalized = instruction.strip()
@@ -480,6 +517,7 @@ class TaskRunner:
             source_session_key=source_session_key,
             target_channel=target_channel or channel,
             target_chat_id=target_chat_id or chat_id,
+            target_channels=self.normalize_target_channels(target_channels),
             schedule=schedule,
             turn=turn,
             deliver_at_ms=schedule.at_ms if execution_type == "prepared_delivery" else None,
@@ -501,6 +539,7 @@ class TaskRunner:
         chat_id: str,
         target_channel: str | None = None,
         target_chat_id: str | None = None,
+        target_channels: list[str] | tuple[str, ...] | None = None,
     ) -> Task:
         """创建一次性延时任务。"""
         return self.create_task(
@@ -513,6 +552,7 @@ class TaskRunner:
             chat_id=chat_id,
             target_channel=target_channel,
             target_chat_id=target_chat_id,
+            target_channels=target_channels,
         )
 
     def create_at_task(
@@ -525,6 +565,7 @@ class TaskRunner:
         chat_id: str,
         target_channel: str | None = None,
         target_chat_id: str | None = None,
+        target_channels: list[str] | tuple[str, ...] | None = None,
     ) -> Task:
         """创建一次性定点任务。"""
         return self.create_task(
@@ -537,6 +578,7 @@ class TaskRunner:
             chat_id=chat_id,
             target_channel=target_channel,
             target_chat_id=target_chat_id,
+            target_channels=target_channels,
         )
 
     def create_daily_task(
@@ -549,6 +591,7 @@ class TaskRunner:
         chat_id: str,
         target_channel: str | None = None,
         target_chat_id: str | None = None,
+        target_channels: list[str] | tuple[str, ...] | None = None,
     ) -> Task:
         """创建每天固定时间重复任务。"""
         return self.create_task(
@@ -561,6 +604,7 @@ class TaskRunner:
             chat_id=chat_id,
             target_channel=target_channel,
             target_chat_id=target_chat_id,
+            target_channels=target_channels,
         )
 
     def create_every_task(
@@ -573,6 +617,7 @@ class TaskRunner:
         chat_id: str,
         target_channel: str | None = None,
         target_chat_id: str | None = None,
+        target_channels: list[str] | tuple[str, ...] | None = None,
     ) -> Task:
         """创建固定间隔重复任务。"""
         return self.create_task(
@@ -585,6 +630,7 @@ class TaskRunner:
             chat_id=chat_id,
             target_channel=target_channel,
             target_chat_id=target_chat_id,
+            target_channels=target_channels,
         )
 
     def update_task(
@@ -806,6 +852,7 @@ class TaskRunner:
                 task_id=task.id,
                 session_id=task.source_session_key,
                 content=final_text,
+                target_channels=task.target_channels,
             )
             task.run.status = "delivered"
             task.run.error = None
@@ -840,6 +887,7 @@ class TaskRunner:
                 task_id=task.id,
                 session_id=task.source_session_key,
                 content=f"自动任务执行失败：{task.run.error}",
+                target_channels=task.target_channels,
             )
             logger.warning(
                 "Task execution timed out: task_id={} session_id={} target_channel={} owner={} phase=run timeout_seconds={}",
@@ -857,6 +905,7 @@ class TaskRunner:
                 task_id=task.id,
                 session_id=task.source_session_key,
                 content=f"自动任务执行失败：{exc}",
+                target_channels=task.target_channels,
             )
             logger.warning(
                 "Task execution failed: task_id={} session_id={} target_channel={} owner={} phase=run error={}",
@@ -925,6 +974,7 @@ class TaskRunner:
                 task_id=task.id,
                 session_id=task.source_session_key,
                 content=content,
+                target_channels=task.target_channels,
             )
             task.run.status = "delivered"
             task.run.error = None
@@ -961,6 +1011,7 @@ class TaskRunner:
                 task_id=task.id,
                 session_id=task.source_session_key,
                 content=f"自动任务执行失败：{task.run.error}",
+                target_channels=task.target_channels,
             )
             logger.warning(
                 "Task execution timed out: task_id={} session_id={} target_channel={} owner={} phase=deliver timeout_seconds={}",
@@ -977,6 +1028,7 @@ class TaskRunner:
                 task_id=task.id,
                 session_id=task.source_session_key,
                 content=f"自动任务执行失败：{exc}",
+                target_channels=task.target_channels,
             )
             logger.warning(
                 "Task execution failed: task_id={} session_id={} target_channel={} owner={} phase=deliver error={}",

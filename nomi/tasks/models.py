@@ -68,6 +68,7 @@ class Task:
     target_channel: str
     target_chat_id: str
     schedule: CronSchedule
+    target_channels: list[str] = field(default_factory=list)
     turn: int | None = 1
     deliver_at_ms: int | None = None
     prepare_before_ms: int | None = None
@@ -87,6 +88,11 @@ class Task:
             source_session_key=payload.get("source_session_key", "cli:direct"),
             target_channel=payload.get("target_channel", "cli"),
             target_chat_id=payload.get("target_chat_id", "direct"),
+            target_channels=[
+                str(item).strip()
+                for item in payload.get("target_channels") or []
+                if str(item).strip()
+            ],
             schedule=CronSchedule.from_dict(payload.get("schedule", {"kind": "at"})),
             turn=payload.get("turn"),
             deliver_at_ms=payload.get("deliver_at_ms"),
@@ -107,6 +113,7 @@ class Task:
             "source_session_key": self.source_session_key,
             "target_channel": self.target_channel,
             "target_chat_id": self.target_chat_id,
+            "target_channels": list(self.target_channels),
             "schedule": self.schedule.to_dict(),
             "turn": self.turn,
             "deliver_at_ms": self.deliver_at_ms,

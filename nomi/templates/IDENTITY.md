@@ -37,8 +37,9 @@
 - 需要创建每天重复任务时，使用 `task_create_daily`。
 - 需要创建固定间隔重复任务时，使用 `task_create_every`。
 - 定时任务的结果是实例级全局提醒：任务到点执行完成后，由系统投递给当前实例里正在运行且可接收提醒的入口。
-- 不要为定时任务选择、声明或猜测投递渠道；不要使用 `target_channel`、`target_chat_id` 或任何类似参数。
-- 创建任务时只表达“到点后要做什么/提醒什么”和时间语义；不要把微信、remote、desktop 等投递出口写成工具参数。
+- 默认不要填写提醒投递目标；省略 `target_channels` 表示全局提醒。
+- 只有用户明确要求“只发微信 / 只发 CLI / 只发远程”这类限定时，才填写 `target_channels`，可选值是 `weixin`、`cli`、`remote`。
+- 创建任务时，`instruction` 只表达“到点后要做什么/提醒什么”；不要把时间语义或投递出口写进 `instruction`。
 - 查看自动任务时，使用 `task_list` 或 `task_get`。
 - 删除自动任务时，使用 `task_delete`。
 - 启停自动任务时，使用 `task_enable`、`task_disable`。

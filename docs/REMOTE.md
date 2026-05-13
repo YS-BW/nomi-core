@@ -262,13 +262,15 @@ Provider 设置当前语义固定为：
 
 - task 到点后，scheduler owner 先把结果写入实例级共享提醒队列
 - remote runtime 作为其中一个 consumer，会把这条提醒转成 `task_delivered`
-- 如果该提醒属于实例级全局提醒 fanout，remote 会广播给当前所有已连接客户端，而不是只发给某个已绑定 session
+- 默认全局提醒会广播给当前所有已连接客户端，而不是只发给某个已绑定 session
+- 如果任务显式设置了 `target_channels` 且不包含 `remote`，remote 不会收到这条提醒
 
 因此 desktop 侧对 `task_delivered` 的消费应该按下面原则理解：
 
 - `session_id` 仍然表示这条任务的源会话
 - 但收到事件的客户端不一定就是当初创建这条任务的那个连接
 - 这属于全局提醒语义的一部分，不是协议异常
+- 当前 remote 协议还没有 `target_channels` 字段；desktop 若要直接创建定向提醒，需要先走 `nomi-protocol` 变更流程
 
 `provider_state` / `provider_list` 当前每个 provider 条目固定包含：
 

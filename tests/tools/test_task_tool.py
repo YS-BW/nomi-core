@@ -92,9 +92,11 @@ async def test_task_create_after_list_get_delete(tmp_path) -> None:
     listed = await tools["task_list"].execute()
     assert "当前有 1 个自动任务" in listed
     assert "instruction: 提醒我吃药" in listed
+    assert "delivery: global" in listed
     task = tools["runner"].list_tasks(include_disabled=True)[0]
     got = await tools["task_get"].execute(task_id=task.id)
     assert f"task_id: {task.id}" in got
+    assert "delivery: global" in got
     assert "schedule kind: after" in got
     removed = await tools["task_delete"].execute(task_id=task.id)
     assert removed == f"已删除自动任务：`{task.id}`"
@@ -130,6 +132,31 @@ async def test_task_create_daily_and_every_map_to_repeating_tasks(tmp_path) -> N
     assert daily_task.schedule.kind == "cron"
     assert every_task.turn is None
     assert every_task.schedule.kind == "every"
+
+
+async def test_task_create_accepts_optional_target_channels(tmp_path) -> None:
+    tools = _make_tools(tmp_path)
+
+    result = await tools["task_create_daily"].execute(
+        instruction="只发微信早安",
+        daily_time="09:00",
+        target_channels=["weixin"],
+    )
+
+    assert "已创建自动任务" in result
+    task = tools["runner"].list_tasks(include_disabled=True)[0]
+    assert task.target_channels == ["weixin"]
+    got = await tools["task_get"].execute(task_id=task.id)
+    assert "delivery: only: weixin" in got
+
+
+def test_task_create_schema_exposes_optional_target_channels(tmp_path) -> None:
+    tools = _make_tools(tmp_path)
+    params = tools["task_create_after"].parameters
+
+    assert "target_channels" in params["properties"]
+    assert "target_channels" not in params["required"]
+    assert params["properties"]["target_channels"]["items"]["enum"] == ["cli", "remote", "weixin"]
 
 
 async def test_task_get_delete_enable_disable_require_task_id(tmp_path) -> None:
@@ -401,6 +428,74 @@ async def test_scheduled_task_enqueues_global_reminder_for_running_consumers(tmp
     assert stored is not None
     assert stored.run.status == "delivered"
     assert stored.run.run_count == 1
+
+
+async def test_scheduled_task_with_target_channels_limits_reminder_targets(tmp_path) -> None:
+    tools = _make_tools(tmp_path)
+    runner = tools["runner"]
+    runner._reminders = runner._reminders.__class__(tmp_path / "tasks-runtime" / "reminders.json")
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "runtime-service.json").write_text(
+        (
+            '{"pid":456,"mode":"foreground",'
+            '"remote":{"running":true},'
+            '"channel":{"running":true,"kind":"weixin"}}'
+        ),
+        encoding="utf-8",
+    )
+
+    import nomi.tasks.runner as task_runner_module
+
+    original_get_logs_dir = task_runner_module.get_logs_dir
+    task_runner_module.get_logs_dir = lambda: logs_dir
+    try:
+        task = runner.create_after_task(
+            instruction="只提醒微信",
+            after_seconds=60,
+            source_session_key="desktop:test-session",
+            channel="desktop",
+            chat_id="test-session",
+            target_channels=["weixin"],
+        )
+
+        async def _fake_process_direct_result(*_args, **_kwargs):
+            return SimpleNamespace(final_content="微信提醒")
+
+        runner._loop.process_direct_result = _fake_process_direct_result
+        await runner._run_scheduled(task)
+    finally:
+        task_runner_module.get_logs_dir = original_get_logs_dir
+
+    assert runner.list_pending_reminders("remote") == []
+    weixin_pending = runner.list_pending_reminders("weixin")
+    assert len(weixin_pending) == 1
+    assert weixin_pending[0].content == "微信提醒"
+
+
+async def test_scheduled_task_with_cli_target_enqueues_even_without_runtime_state(tmp_path) -> None:
+    tools = _make_tools(tmp_path)
+    runner = tools["runner"]
+    runner._reminders = runner._reminders.__class__(tmp_path / "tasks-runtime" / "reminders.json")
+    task = runner.create_after_task(
+        instruction="只提醒 CLI",
+        after_seconds=60,
+        source_session_key="desktop:test-session",
+        channel="desktop",
+        chat_id="test-session",
+        target_channels=["cli"],
+    )
+
+    async def _fake_process_direct_result(*_args, **_kwargs):
+        return SimpleNamespace(final_content="CLI 提醒")
+
+    runner._loop.process_direct_result = _fake_process_direct_result
+    await runner._run_scheduled(task)
+
+    cli_pending = runner.list_pending_reminders("cli")
+    assert len(cli_pending) == 1
+    assert cli_pending[0].content == "CLI 提醒"
+    assert runner.list_pending_reminders("weixin") == []
 
 
 @pytest.mark.asyncio

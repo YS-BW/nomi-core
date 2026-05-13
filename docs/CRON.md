@@ -130,7 +130,7 @@ self.cron_service.on_job = self._run_cron_job
 
 ## 全局提醒投递
 
-当前任务结果投递已经不是简单的单个 `target_channel/chat_id` 单播，而是：
+当前任务结果默认不是简单的单个 `target_channel/chat_id` 单播，而是：
 
 ```text
 task run completed
@@ -141,6 +141,14 @@ remote / channel / cli runtime 在 idle tick 中各自消费
   ↓
 每个已启动入口收到一份提醒
 ```
+
+如果任务显式设置了 `target_channels`，投递范围会被限制到指定入口：
+
+- 不设置或设置为空：全局提醒，投递给当前实例里正在运行且可接收提醒的入口
+- `["weixin"]`：只投递微信
+- `["cli"]`：只投递 CLI
+- `["remote"]`：只投递 remote / desktop
+- 多个值：只投递这些入口
 
 当前共享提醒记录默认保存在：
 
@@ -160,8 +168,10 @@ remote / channel / cli runtime 在 idle tick 中各自消费
 这套语义的重点是：
 
 - 创建入口和投递入口已经解耦
-- 同一实例里只要某个入口当前正在运行，它就能各自收到同一条任务提醒
-- 不需要在当前公开工具或 remote 协议里额外暴露 `target_channel / target_chat_id`
+- 默认情况下，同一实例里只要某个入口当前正在运行，它就能各自收到同一条任务提醒
+- 如果任务设置了 `target_channels`，则只向指定入口投递
+- 当前公开 Agent 工具支持可选 `target_channels`
+- remote 协议当前还没有 `target_channels` 字段；desktop 直接显式创建定向任务需要先走 `nomi-protocol` 变更流程
 
 ---
 
