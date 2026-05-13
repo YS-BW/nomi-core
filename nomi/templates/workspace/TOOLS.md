@@ -68,6 +68,9 @@
 - 每天固定时间重复任务用 `task_create_daily(instruction, daily_time)`
 - 固定间隔重复任务用 `task_create_every(instruction, every_seconds)`
 - `instruction` 只写到点后真正要发给用户的话，不要把时间语义写进 `instruction`
+- 定时任务结果采用实例级全局提醒，系统会投递给当前实例里正在运行且可接收提醒的入口
+- 不要为任务选择或声明投递渠道，不要使用 `target_channel`、`target_chat_id` 或任何类似参数
+- 如果用户说“提醒我”，默认就是全局提醒，不要追问发到哪个渠道
 - 查看所有任务用 `task_list()`；查看单个任务详情用 `task_get(task_id=...)`
 - 删除现有任务用 `task_delete(task_id=...)`
 - 启停任务用 `task_enable(task_id=...)`、`task_disable(task_id=...)`

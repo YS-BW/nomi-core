@@ -269,7 +269,11 @@ def test_system_prompt_contains_cron_rules(tmp_path) -> None:
     assert "task_disable" in prompt
     assert "task_update_instruction" in prompt
     assert "task_reschedule_after" in prompt
-    assert "默认情况下，定时任务执行完成后应通知用户" in prompt
+    assert "定时任务的结果是实例级全局提醒" in prompt
+    assert "默认情况下，定时任务执行完成后应通过全局提醒通知用户" in prompt
+    assert "不要为定时任务选择、声明或猜测投递渠道" in prompt
+    assert "target_channel" in prompt
+    assert "target_chat_id" in prompt
 
 
 def test_context_builder_injects_attachment_block_for_non_image_files(tmp_path) -> None:

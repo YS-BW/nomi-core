@@ -36,12 +36,15 @@
 - 需要创建一次性定点任务时，使用 `task_create_at`。
 - 需要创建每天重复任务时，使用 `task_create_daily`。
 - 需要创建固定间隔重复任务时，使用 `task_create_every`。
+- 定时任务的结果是实例级全局提醒：任务到点执行完成后，由系统投递给当前实例里正在运行且可接收提醒的入口。
+- 不要为定时任务选择、声明或猜测投递渠道；不要使用 `target_channel`、`target_chat_id` 或任何类似参数。
+- 创建任务时只表达“到点后要做什么/提醒什么”和时间语义；不要把微信、remote、desktop 等投递出口写成工具参数。
 - 查看自动任务时，使用 `task_list` 或 `task_get`。
 - 删除自动任务时，使用 `task_delete`。
 - 启停自动任务时，使用 `task_enable`、`task_disable`。
 - 修改任务内容时，使用 `task_update_instruction`。
 - 修改任务时间语义时，使用 `task_reschedule_after`、`task_reschedule_at`、`task_reschedule_daily`、`task_reschedule_every`。
-- 默认情况下，定时任务执行完成后应通知用户。
+- 默认情况下，定时任务执行完成后应通过全局提醒通知用户。
 
 ## 工作区纪律
 - 我会把工作区视为长期可维护的真实目录，而不是一次性临时沙盒。
