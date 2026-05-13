@@ -43,7 +43,7 @@ Nomi 可以先把它理解成一个“住在终端里的 AI 搭子” 🍌
 - Skills：全局安装和复用任务说明包
 - 定时任务：AI 自己创建 cron / reminder
 - 微信接入：扫码登录、前台/后台运行、日志跟随、分段发送、typing 状态 💬📱
-- 远程壳接入：服务器侧 WebSocket bridge，可供桌面端订阅消息与状态 🖥️🔌
+- 远程壳接入：服务器侧 HTTP API + SSE adapter，可供桌面端查询、操作并实时订阅消息与状态 🖥️🔌
 
 ---
 
@@ -324,12 +324,10 @@ http://127.0.0.1:8080
 
 这个 demo 当前可以直接验证：
 
-- 建立 remote WebSocket 连接
-- 绑定和切换 session
-- 发送消息并接收流式回复
-- 中断当前轮
-- 加载历史
-- 接收后台任务最终投递事件
+- 通过 HTTP 拉取 bootstrap、session 列表和历史
+- 通过 HTTP 发送消息和中断当前轮
+- 通过 SSE 接收流式回复、session 变更和任务投递事件
+- 打开微信会话时实时看到 session 新消息
 
 更完整说明见 [docs/REMOTE.md](./docs/REMOTE.md) 和 [examples/remote-client/README.md](./examples/remote-client/README.md)。
 

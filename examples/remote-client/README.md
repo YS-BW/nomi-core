@@ -1,6 +1,6 @@
 # Nomi Remote Client Demo
 
-这是一个 **最小网页版 remote 协议验证器** 🌐
+这是一个 **最小网页版 HTTP + SSE remote 协议验证器** 🌐
 
 它的角色很单纯：
 
@@ -10,9 +10,9 @@
 
 ## 能做什么
 
-- 连接 `nomi remote` 的 WebSocket 服务
-- 绑定指定 session
-- 发送消息并接收流式 `delta`
+- 通过 HTTP 拉取 bootstrap、session 列表和历史
+- 通过 HTTP 发送消息、中断当前轮
+- 通过 SSE 接收 `turn.delta`、session 变更和 task 事件
 - 中断当前轮
 - 查看 session 列表
 - 加载指定 session 的历史消息
@@ -24,7 +24,8 @@
 ### 1. 启动 remote 服务端
 
 ```bash
-nomi remote run
+nomi remote enable
+nomi instance restart
 ```
 
 ### 2. 启动静态文件服务
@@ -41,15 +42,14 @@ http://127.0.0.1:8080
 
 ## 鉴权方式
 
-浏览器原生 WebSocket 不能直接设置 `Authorization` header。
-
-所以这份 demo 当前走的是：
+浏览器 `EventSource` 不能直接设置 `Authorization` header。
+所以 SSE 连接使用 query token：
 
 ```text
-ws://host:port/ws?token=<remote.auth_token>
+http://host:port/v1/events?token=<remote.auth_token>
 ```
 
-而 remote 服务端仍然保留标准 Bearer Token 主路径：
+HTTP API 仍使用标准 Bearer Token：
 
 ```text
 Authorization: Bearer <remote.auth_token>
@@ -57,8 +57,8 @@ Authorization: Bearer <remote.auth_token>
 
 也就是说：
 
-- 浏览器 demo：走 `?token=...`
-- 正式桌面壳 / 非浏览器客户端：优先继续走 `Authorization: Bearer ...`
+- 浏览器 demo：SSE 走 `?token=...`，HTTP fetch 走 Bearer
+- 正式桌面壳 / 非浏览器客户端：HTTP 和 SSE 都优先走 `Authorization: Bearer ...`
 
 ## 页面结构
 
@@ -76,30 +76,27 @@ Authorization: Bearer <remote.auth_token>
 普通对话期望时序：
 
 ```text
-send_message
-  -> turn_started
-  -> delta*
-  -> stream_end*
-  -> message
-  -> turn_completed
+POST /v1/sessions/{session_id}/turns
+  -> turn.started
+  -> turn.delta*
+  -> turn.stream_end*
+  -> turn.completed
 ```
 
 任务投递是独立事件：
 
 ```text
-task_delivered
+task.delivered
 ```
 
 状态和控制类事件：
 
 ```text
-ready
-session_bound
-status_result
-history_snapshot
-session_list
-interrupt_result
-error
+runtime.connected
+session.created / session.updated / session.message_appended
+provider.state_changed
+sidebar.snapshot
+runtime.resync_required
 ```
 
 ## 当前限制

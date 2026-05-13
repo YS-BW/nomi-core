@@ -1,13 +1,15 @@
-"""remote desktop shell 服务测试。"""
+"""remote HTTP + SSE 服务测试。"""
 
 from __future__ import annotations
 
-import json
 import asyncio
+import json
+from collections.abc import AsyncIterator
 from datetime import datetime
+from types import SimpleNamespace
 
+import httpx
 import pytest
-from websockets.asyncio.client import connect
 
 from nomi.bus.events import OutboundMessage
 from nomi.bus.queue import MessageBus
@@ -15,18 +17,42 @@ from nomi.config.schema import Config
 from nomi.remote.server import RemoteServer
 from nomi.runtime.errors import ProviderApiBaseNotEditableError
 from nomi.runtime.models import InterruptResult, RuntimeStatusSnapshot
-from nomi.session.errors import (
-    DuplicateSessionIdError,
-    InvalidPageTokenError,
-    SessionNotFoundError,
-)
+from nomi.session.errors import DuplicateSessionIdError, InvalidPageTokenError, SessionNotFoundError
+
+
+class _FakeSessions:
+    """测试用 session 变更订阅源。"""
+
+    def __init__(self) -> None:
+        """初始化订阅列表。"""
+        self._callbacks = []
+
+    def subscribe_changes(self, callback):
+        """注册 session 变更回调。"""
+        self._callbacks.append(callback)
+
+        def _unsubscribe() -> None:
+            if callback in self._callbacks:
+                self._callbacks.remove(callback)
+
+        return _unsubscribe
+
+    def emit_saved(self, session, new_messages) -> None:
+        """触发一次保存事件。"""
+        for callback in list(self._callbacks):
+            callback("saved", session, new_messages)
 
 
 class _FakeRuntime:
+    """测试用 remote runtime facade。"""
+
     def __init__(self) -> None:
+        """初始化 fake runtime。"""
         self.bus = MessageBus()
+        self.agent_loop = SimpleNamespace(sessions=_FakeSessions())
         self.sent_messages: list[tuple[str, str, str, dict | None]] = []
         self.interrupt_calls: list[str] = []
+        self.reset_calls: list[str] = []
         now_ms = int(datetime.now().timestamp() * 1000)
         self.sessions: dict[str, dict] = {
             "desktop:test": {
@@ -40,11 +66,11 @@ class _FakeRuntime:
                 "source": "desktop",
             }
         }
-        self.sidebar = {
-            "tasks": [],
-            "skills": [],
-            "mcpServers": [],
+        self.messages: dict[str, list[dict]] = {
+            "desktop:test": [{"role": "user", "content": "hello"}],
         }
+        self.sidebar = {"tasks": [], "skills": [], "mcpServers": []}
+        self.tasks: dict[str, dict] = {}
         self.task_actions: list[tuple[str, dict]] = []
         self.skill_sources: list[str] = []
         self.uninstalled_skills: list[str] = []
@@ -68,15 +94,24 @@ class _FakeRuntime:
                     "source": "config",
                 }
             ],
-            "active": {
-                "provider": "deepseek",
-                "model": "deepseek-chat",
-            },
+            "active": {"provider": "deepseek", "model": "deepseek-chat"},
             "apply_mode": "reload_runtime",
         }
         self.provider_updates: list[dict] = []
         self.active_provider_updates: list[dict] = []
         self.runtime_reload_calls = 0
+
+    async def create_turn(
+        self,
+        session_id: str,
+        content: str,
+        *,
+        client_id: str,
+        metadata: dict | None = None,
+    ) -> dict:
+        """创建测试 turn。"""
+        await self.send_user_message(session_id, content, client_id=client_id, metadata=metadata)
+        return {"turn_id": "turn_fake", "session_id": session_id, "status": "queued"}
 
     async def send_user_message(
         self,
@@ -86,13 +121,16 @@ class _FakeRuntime:
         client_id: str,
         metadata: dict | None = None,
     ) -> None:
+        """记录一条远端消息。"""
         if session_id not in self.sessions:
             raise SessionNotFoundError("session not found", session_id=session_id)
         self.sent_messages.append((session_id, content, client_id, metadata))
+        self.messages.setdefault(session_id, []).append({"role": "user", "content": content})
         self.sessions[session_id]["updated_at_ms"] = int(datetime.now().timestamp() * 1000)
-        self.sessions[session_id]["message_count"] = int(self.sessions[session_id]["message_count"]) + 1
+        self.sessions[session_id]["message_count"] = len(self.messages[session_id])
 
     def interrupt_session(self, session_id: str, reason: str = "user_interrupt"):
+        """记录中断请求。"""
         if session_id not in self.sessions:
             raise SessionNotFoundError("session not found", session_id=session_id)
         self.interrupt_calls.append(session_id)
@@ -104,7 +142,16 @@ class _FakeRuntime:
             already_interrupting=False,
         )
 
+    def reset_session(self, session_id: str) -> None:
+        """重置测试会话。"""
+        if session_id not in self.sessions:
+            raise SessionNotFoundError("session not found", session_id=session_id)
+        self.reset_calls.append(session_id)
+        self.messages[session_id] = []
+        self.sessions[session_id]["message_count"] = 0
+
     async def get_status_snapshot(self, session_id: str):
+        """返回测试状态。"""
         if session_id not in self.sessions:
             raise SessionNotFoundError("session not found", session_id=session_id)
         return RuntimeStatusSnapshot(
@@ -118,6 +165,45 @@ class _FakeRuntime:
             search_usage_text=None,
         )
 
+    async def get_status_payload(self) -> dict:
+        """返回 vNext 状态。"""
+        return {
+            "version": "0.1.5",
+            "model": "mimo-v2.5",
+            "start_time": 1.0,
+            "last_usage": {"prompt_tokens": 1, "completion_tokens": 2},
+            "context_window_tokens": 4096,
+            "session_msg_count": 3,
+            "context_tokens_estimate": 128,
+            "search_usage_text": None,
+        }
+
+    async def get_bootstrap_snapshot(self) -> dict:
+        """返回 bootstrap 快照。"""
+        return {
+            "status": await self.get_status_payload(),
+            "sessions": list(self.sessions.values()),
+            "provider_catalog": {
+                "providers": [
+                    {
+                        "name": "deepseek",
+                        "display_name": "DeepSeek",
+                        "backend": "deepseek",
+                        "default_api_base": "https://api.deepseek.com",
+                        "api_base_editable": False,
+                        "is_gateway": False,
+                        "is_local": False,
+                        "is_direct": False,
+                        "strip_model_prefix": False,
+                        "supports_prompt_caching": False,
+                    }
+                ]
+            },
+            "provider_state": self.provider_state,
+            "tasks": self.list_task_items(),
+            "sidebar": self.sidebar,
+        }
+
     def list_sessions(
         self,
         *,
@@ -125,6 +211,7 @@ class _FakeRuntime:
         page_size: int | None = None,
         include_archived: bool | None = None,
     ) -> dict:
+        """列出测试会话。"""
         if page_token == "bad-token":
             raise InvalidPageTokenError("invalid page token")
         sessions = sorted(
@@ -135,13 +222,10 @@ class _FakeRuntime:
             sessions = [item for item in sessions if not item.get("archived")]
         if page_size is not None and page_size > 0:
             sessions = sessions[:page_size]
-        return {
-            "sessions": sessions,
-            "next_page_token": None,
-            "total_count": len(self.sessions),
-        }
+        return {"sessions": sessions, "next_page_token": None, "total_count": len(self.sessions)}
 
     def create_session(self, session_id: str | None = None, *, title: str | None = None) -> dict:
+        """创建测试会话。"""
         normalized = str(session_id or "").strip() or "remote:created"
         if normalized in self.sessions:
             raise DuplicateSessionIdError("duplicate session id", session_id=normalized)
@@ -157,148 +241,220 @@ class _FakeRuntime:
             "source": "remote",
         }
         self.sessions[normalized] = payload
+        self.messages[normalized] = []
         return payload
 
+    def get_session(self, session_id: str) -> dict:
+        """读取测试会话。"""
+        if session_id not in self.sessions:
+            raise SessionNotFoundError("session not found", session_id=session_id)
+        return self.sessions[session_id]
+
     def delete_session(self, session_id: str) -> dict:
+        """删除测试会话。"""
         if session_id not in self.sessions:
             raise SessionNotFoundError("session not found", session_id=session_id)
         self.sessions.pop(session_id, None)
+        self.messages.pop(session_id, None)
         return {"session_id": session_id, "deleted": True}
 
-    def load_session_messages(self, session_id: str, *, limit: int = 100, cursor: int | None = None) -> dict:
+    def load_session_messages(
+        self, session_id: str, *, limit: int = 100, cursor: int | None = None
+    ) -> dict:
+        """读取测试消息。"""
+        del cursor
         if session_id not in self.sessions:
             raise SessionNotFoundError("session not found", session_id=session_id)
+        messages = self.messages.get(session_id, [])[-limit:]
         return {
             "session_id": session_id,
-            "messages": [{"role": "user", "content": "hello"}],
-            "cursor": 1,
+            "messages": messages,
+            "cursor": len(self.messages.get(session_id, [])),
             "next_cursor": None,
-            "total_messages": 1,
+            "total_messages": len(self.messages.get(session_id, [])),
         }
 
     def get_sidebar_snapshot(self) -> dict:
+        """返回侧栏快照。"""
         return self.sidebar
 
-    def create_task_after(self, session_id: str, *, instruction: str, after_seconds: int) -> dict:
-        self.task_actions.append(("create_after", {"session_id": session_id, "instruction": instruction, "after_seconds": after_seconds}))
-        task = {"id": "task_after", "title": instruction}
-        self.sidebar["tasks"] = [task]
+    def list_task_items(self) -> list[dict]:
+        """列出任务。"""
+        return list(self.tasks.values())
+
+    def get_task_item(self, task_id: str) -> dict | None:
+        """读取任务。"""
+        return self.tasks.get(task_id)
+
+    def create_task_from_schedule(
+        self,
+        *,
+        instruction: str,
+        schedule,
+        source_session_key: str,
+        target_channels: list[str] | None = None,
+    ) -> dict:
+        """创建任务。"""
+        task_id = f"task_{len(self.tasks) + 1}"
+        task = {
+            "id": task_id,
+            "title": instruction[:30],
+            "instruction": instruction,
+            "enabled": True,
+            "schedule": {
+                "kind": schedule.kind,
+                "at_ms": schedule.at_ms,
+                "every_ms": schedule.every_ms,
+                "expr": schedule.expr,
+                "tz": schedule.tz,
+            },
+            "next_run_at_ms": schedule.at_ms,
+            "run_count": 0,
+            "status": "pending",
+            "target_channels": list(target_channels or []),
+        }
+        self.tasks[task_id] = task
+        self.sidebar["tasks"] = [self._to_sidebar_task(task)]
+        self.task_actions.append(
+            (
+                "create",
+                {
+                    "source_session_key": source_session_key,
+                    "target_channels": target_channels or [],
+                },
+            )
+        )
         return task
 
-    def create_task_at(self, session_id: str, *, instruction: str, at: str) -> dict:
-        self.task_actions.append(("create_at", {"session_id": session_id, "instruction": instruction, "at": at}))
-        task = {"id": "task_at", "title": instruction}
-        self.sidebar["tasks"] = [task]
-        return task
+    @staticmethod
+    def schedule_from_remote_payload(payload):
+        """转换协议调度。"""
+        from nomi.cron.types import CronSchedule
 
-    def create_task_daily(self, session_id: str, *, instruction: str, daily_time: str) -> dict:
-        self.task_actions.append(("create_daily", {"session_id": session_id, "instruction": instruction, "daily_time": daily_time}))
-        task = {"id": "task_daily", "title": instruction}
-        self.sidebar["tasks"] = [task]
-        return task
+        return CronSchedule(
+            kind=payload.kind,
+            at_ms=payload.at_ms,
+            every_ms=payload.every_ms,
+            expr=payload.expr,
+            tz=payload.tz,
+        )
 
-    def create_task_every(self, session_id: str, *, instruction: str, every_seconds: int) -> dict:
-        self.task_actions.append(("create_every", {"session_id": session_id, "instruction": instruction, "every_seconds": every_seconds}))
-        task = {"id": "task_every", "title": instruction}
-        self.sidebar["tasks"] = [task]
+    def update_task_instruction(self, task_id: str, instruction: str) -> dict | None:
+        """更新任务内容。"""
+        task = self.tasks.get(task_id)
+        if not task:
+            return None
+        task["instruction"] = instruction
+        task["title"] = instruction[:30]
         return task
 
     def delete_task(self, task_id: str) -> bool:
+        """删除任务。"""
         self.task_actions.append(("delete", {"task_id": task_id}))
-        self.sidebar["tasks"] = []
-        return True
+        existed = self.tasks.pop(task_id, None) is not None
+        self.sidebar["tasks"] = [self._to_sidebar_task(task) for task in self.tasks.values()]
+        return existed
 
     def enable_task(self, task_id: str) -> dict | None:
-        self.task_actions.append(("enable", {"task_id": task_id}))
-        return {"id": task_id}
+        """启用任务。"""
+        task = self.tasks.get(task_id)
+        if task:
+            task["enabled"] = True
+        return task
 
     def disable_task(self, task_id: str) -> dict | None:
-        self.task_actions.append(("disable", {"task_id": task_id}))
-        return {"id": task_id}
+        """停用任务。"""
+        task = self.tasks.get(task_id)
+        if task:
+            task["enabled"] = False
+        return task
 
-    def update_task_instruction(self, task_id: str, instruction: str) -> dict | None:
-        self.task_actions.append(("update_instruction", {"task_id": task_id, "instruction": instruction}))
-        return {"id": task_id}
+    @staticmethod
+    def _to_sidebar_task(task: dict) -> dict:
+        """转换为侧栏任务。"""
+        schedule = task["schedule"]
+        return {
+            "id": task["id"],
+            "title": task["title"],
+            "instruction": task["instruction"],
+            "enabled": task["enabled"],
+            "scheduleKind": schedule["kind"],
+            "scheduleAtMs": schedule.get("at_ms"),
+            "scheduleEveryMs": schedule.get("every_ms"),
+            "scheduleExpr": schedule.get("expr"),
+            "scheduleTz": schedule.get("tz"),
+            "nextRunAtMs": task.get("next_run_at_ms"),
+            "runCount": task["run_count"],
+            "status": task["status"],
+            "targetChannels": task["target_channels"],
+        }
 
-    def reschedule_task_after(self, task_id: str, *, after_seconds: int) -> dict | None:
-        self.task_actions.append(("reschedule_after", {"task_id": task_id, "after_seconds": after_seconds}))
-        return {"id": task_id}
-
-    def reschedule_task_at(self, task_id: str, *, at: str) -> dict | None:
-        self.task_actions.append(("reschedule_at", {"task_id": task_id, "at": at}))
-        return {"id": task_id}
-
-    def reschedule_task_daily(self, task_id: str, *, daily_time: str) -> dict | None:
-        self.task_actions.append(("reschedule_daily", {"task_id": task_id, "daily_time": daily_time}))
-        return {"id": task_id}
-
-    def reschedule_task_every(self, task_id: str, *, every_seconds: int) -> dict | None:
-        self.task_actions.append(("reschedule_every", {"task_id": task_id, "every_seconds": every_seconds}))
-        return {"id": task_id}
+    def list_skills(self) -> list[dict]:
+        """列出 skills。"""
+        return [
+            {"name": item["name"], "key": item["name"], "path": item["path"], "description": ""}
+            for item in self.sidebar["skills"]
+        ]
 
     def install_skill(self, source: str) -> tuple[bool, str]:
+        """安装 skill。"""
         self.skill_sources.append(source)
         self.sidebar["skills"] = [{"name": "demo-skill", "path": source}]
         return True, "已安装 skill：`demo-skill`。"
 
     def uninstall_skill(self, skill_name: str) -> tuple[bool, str]:
+        """卸载 skill。"""
         self.uninstalled_skills.append(skill_name)
         self.sidebar["skills"] = []
         return True, f"已卸载 skill：`{skill_name}`。"
 
+    def list_mcp_servers(self) -> list[dict]:
+        """列出 MCP server。"""
+        return self.sidebar["mcpServers"]
+
     async def create_mcp_server(self, mcp_name: str, payload: dict) -> dict:
+        """创建 MCP server。"""
         self.mcp_actions.append(("create", mcp_name, payload))
-        self.sidebar["mcpServers"] = [{"name": mcp_name, **payload}]
-        return {"name": mcp_name}
+        item = {"name": mcp_name, **payload}
+        self.sidebar["mcpServers"] = [item]
+        return item
 
     async def update_mcp_server(self, mcp_name: str, payload: dict) -> dict:
+        """更新 MCP server。"""
         self.mcp_actions.append(("update", mcp_name, payload))
-        self.sidebar["mcpServers"] = [{"name": mcp_name, **payload}]
-        return {"name": mcp_name}
+        item = {"name": mcp_name, **payload}
+        self.sidebar["mcpServers"] = [item]
+        return item
 
     async def delete_mcp_server(self, mcp_name: str) -> bool:
+        """删除 MCP server。"""
         self.mcp_actions.append(("delete", mcp_name, None))
         self.sidebar["mcpServers"] = []
         return True
 
     async def enable_mcp_server(self, mcp_name: str) -> dict | None:
+        """启用 MCP server。"""
         self.mcp_actions.append(("enable", mcp_name, None))
-        return {"name": mcp_name}
+        return {"name": mcp_name, "enabled": True}
 
     async def disable_mcp_server(self, mcp_name: str) -> dict | None:
+        """停用 MCP server。"""
         self.mcp_actions.append(("disable", mcp_name, None))
-        return {"name": mcp_name}
+        return {"name": mcp_name, "enabled": False}
 
     async def clear_remote_runtime_state(self) -> None:
+        """清理 remote 运行态。"""
         self.clear_calls += 1
         self.sidebar = {"tasks": [], "skills": [], "mcpServers": []}
+        self.tasks = {}
 
     def get_provider_state_snapshot(self) -> dict:
+        """返回 provider 状态。"""
         return self.provider_state
 
     def list_providers(self) -> dict:
+        """返回 provider 列表。"""
         return self.provider_state
-
-    def set_provider_settings(self, provider_name: str, *, api_key=Ellipsis, api_base=Ellipsis, model=Ellipsis) -> dict:
-        update = {
-            "provider": provider_name,
-            "api_key": api_key,
-            "api_base": api_base,
-            "model": model,
-        }
-        self.provider_updates.append(update)
-        settings = {
-            "provider": provider_name,
-            "api_key_set": api_key not in (Ellipsis, None, ""),
-            "api_key_preview": "…9999" if api_key not in (Ellipsis, None, "") else None,
-            "saved_model": None if model in (Ellipsis, None, "") else model,
-            "api_base": None if api_base in (Ellipsis, None, "") else api_base,
-        }
-        return {
-            "provider": provider_name,
-            "settings": settings,
-            "requires_runtime_reload": True,
-        }
 
     def update_provider(
         self,
@@ -309,6 +465,7 @@ class _FakeRuntime:
         model=Ellipsis,
         clear_api_key=Ellipsis,
     ) -> dict:
+        """更新 provider。"""
         update = {
             "provider": provider_name,
             "api_key": api_key,
@@ -325,29 +482,26 @@ class _FakeRuntime:
             "editable": True,
             "deletable": False,
             "api_key_set": False if clear_api_key is True else api_key not in (Ellipsis, None, ""),
-            "api_key_preview": None if clear_api_key is True or api_key in (Ellipsis, None, "") else "…9999",
+            "api_key_preview": None
+            if clear_api_key is True or api_key in (Ellipsis, None, "")
+            else "…9999",
             "saved_model": None if model in (Ellipsis, None, "") else model,
             "api_base": None if api_base in (Ellipsis, None, "") else api_base,
             "api_base_editable": provider_name == "custom",
             "default_api_base": None if provider_name == "custom" else "https://api.deepseek.com",
             "source": "config",
         }
-        return {
-            "provider": provider_name,
-            "settings": settings,
-            "requires_runtime_reload": True,
-        }
+        return {"provider": provider_name, "settings": settings, "requires_runtime_reload": True}
 
     def set_active_provider(self, provider_name: str, *, model: str | None = None) -> dict:
+        """切换 provider。"""
         self.active_provider_updates.append({"provider": provider_name, "model": model})
         active = {"provider": provider_name, "model": model or "fallback-model"}
         self.provider_state["active"] = active
-        return {
-            "active": active,
-            "requires_runtime_reload": True,
-        }
+        return {"active": active, "requires_runtime_reload": True}
 
     async def reload_runtime(self) -> dict:
+        """重载 runtime。"""
         self.runtime_reload_calls += 1
         return {
             "active": dict(self.provider_state["active"]),
@@ -355,247 +509,302 @@ class _FakeRuntime:
         }
 
 
-@pytest.mark.asyncio
-async def test_remote_server_websocket_protocol() -> None:
+def _config(port: int) -> Config:
+    """构造 remote 测试配置。"""
     config = Config()
     config.remote.enabled = True
     config.remote.host = "127.0.0.1"
-    config.remote.port = 8876
+    config.remote.port = port
     config.remote.auth_token = "secret-token"
+    return config
+
+
+def _auth() -> dict[str, str]:
+    """返回测试鉴权头。"""
+    return {"Authorization": "Bearer secret-token"}
+
+
+async def _next_sse_event(lines: AsyncIterator[str]) -> dict:
+    """读取下一条 SSE 事件。"""
+    event_type = None
+    async for line in lines:
+        if not line or line.startswith(":"):
+            continue
+        if line.startswith("event: "):
+            event_type = line.removeprefix("event: ")
+            continue
+        if line.startswith("data: "):
+            payload = json.loads(line.removeprefix("data: "))
+            if event_type is not None:
+                assert payload["type"] == event_type
+            return payload
+    raise AssertionError("SSE stream ended")
+
+
+@pytest.mark.asyncio
+async def test_remote_http_bootstrap_sessions_turns_and_sse() -> None:
+    """HTTP 操作和 SSE turn 事件应形成闭环。"""
     runtime = _FakeRuntime()
-    server = RemoteServer(config, runtime)  # type: ignore[arg-type]
+    server = RemoteServer(_config(8876), runtime)  # type: ignore[arg-type]
 
     await server.start()
     try:
-        async with connect(
-            "ws://127.0.0.1:8876/ws",
-            additional_headers={"Authorization": "Bearer secret-token"},
-        ) as websocket:
-            ready = json.loads(await websocket.recv())
-            assert ready["type"] == "ready"
-            assert ready["provider_catalog"]["providers"]
-            assert ready["provider_state"]["active"]["provider"] == "deepseek"
-            assert ready["provider_state"]["apply_mode"] == "reload_runtime"
-            custom = next(item for item in ready["provider_catalog"]["providers"] if item["name"] == "custom")
-            deepseek = next(item for item in ready["provider_catalog"]["providers"] if item["name"] == "deepseek")
-            assert custom["api_base_editable"] is True
-            assert deepseek["api_base_editable"] is False
-            assert deepseek["default_api_base"] == "https://api.deepseek.com"
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            preflight = await client.options("http://127.0.0.1:8876/v1/bootstrap")
+            assert preflight.status_code == 204
+            assert preflight.headers["access-control-allow-origin"] == "*"
 
-            await websocket.send(json.dumps({"type": "bind_session", "session_id": "desktop:test"}))
-            bound = json.loads(await websocket.recv())
-            assert bound == {"type": "session_bound", "session_id": "desktop:test"}
+            unauthorized = await client.get("http://127.0.0.1:8876/v1/bootstrap")
+            assert unauthorized.status_code == 401
+            assert unauthorized.headers["access-control-allow-origin"] == "*"
 
-            await websocket.send(
-                json.dumps(
-                    {
-                        "type": "send_message",
-                        "session_id": "desktop:test",
+            bootstrap = await client.get("http://127.0.0.1:8876/v1/bootstrap", headers=_auth())
+            assert bootstrap.status_code == 200
+            assert bootstrap.headers["access-control-allow-origin"] == "*"
+            assert bootstrap.json()["provider_state"]["active"]["provider"] == "deepseek"
+            assert bootstrap.json()["sessions"][0]["session_id"] == "desktop:test"
+
+            created = await client.post(
+                "http://127.0.0.1:8876/v1/sessions",
+                headers=_auth(),
+                json={"session_id": "desktop:new", "title": "New"},
+            )
+            assert created.status_code == 201
+            assert created.json()["session"]["session_id"] == "desktop:new"
+
+            listed = await client.get("http://127.0.0.1:8876/v1/sessions", headers=_auth())
+            assert listed.json()["page"]["total_count"] == 2
+
+            messages = await client.get(
+                "http://127.0.0.1:8876/v1/sessions/desktop:test/messages", headers=_auth()
+            )
+            assert messages.json()["messages"][0]["content"] == "hello"
+
+            async with client.stream(
+                "GET", "http://127.0.0.1:8876/v1/events?token=secret-token"
+            ) as stream:
+                lines = stream.aiter_lines()
+                connected = await asyncio.wait_for(_next_sse_event(lines), timeout=2.0)
+                assert connected["type"] == "runtime.connected"
+
+                queued = await client.post(
+                    "http://127.0.0.1:8876/v1/sessions/desktop:test/turns",
+                    headers=_auth(),
+                    json={
                         "content": "你好",
                         "client_id": "client-a",
-                    }
+                        "metadata": {"source": "test"},
+                    },
                 )
-            )
-            started = json.loads(await websocket.recv())
-            assert started == {"type": "turn_started", "session_id": "desktop:test"}
-            assert runtime.sent_messages == [("desktop:test", "你好", "client-a", {})]
-
-            await runtime.bus.publish_outbound(
-                OutboundMessage(
-                    channel="desktop",
-                    chat_id="test",
-                    content="片段",
-                    metadata={"_session_id": "desktop:test", "_stream_delta": True},
+                assert queued.status_code == 202
+                assert queued.json() == {
+                    "turn_id": "turn_fake",
+                    "session_id": "desktop:test",
+                    "status": "queued",
+                }
+                assert runtime.sent_messages[-1] == (
+                    "desktop:test",
+                    "你好",
+                    "client-a",
+                    {"source": "test"},
                 )
-            )
-            delta = json.loads(await websocket.recv())
-            assert delta == {"type": "delta", "session_id": "desktop:test", "content": "片段"}
 
-            await runtime.bus.publish_outbound(
-                OutboundMessage(
-                    channel="desktop",
-                    chat_id="test",
-                    content="",
-                    metadata={"_session_id": "desktop:test", "_stream_end": True, "_resuming": False},
+                started = await asyncio.wait_for(_next_sse_event(lines), timeout=2.0)
+                assert started["type"] == "turn.started"
+                assert started["data"]["session_id"] == "desktop:test"
+
+                await runtime.bus.publish_outbound(
+                    OutboundMessage(
+                        channel="desktop",
+                        chat_id="test",
+                        content="片段",
+                        metadata={
+                            "_session_id": "desktop:test",
+                            "_stream_delta": True,
+                            "_turn_id": "turn_fake",
+                        },
+                    )
                 )
-            )
-            stream_end = json.loads(await websocket.recv())
-            assert stream_end == {
-                "type": "stream_end",
-                "session_id": "desktop:test",
-                "resuming": False,
-            }
+                delta = await asyncio.wait_for(_next_sse_event(lines), timeout=2.0)
+                assert delta["type"] == "turn.delta"
+                assert delta["data"]["content"] == "片段"
 
-            await runtime.bus.publish_outbound(
-                OutboundMessage(
-                    channel="desktop",
-                    chat_id="test",
-                    content="最终回复",
-                    metadata={"_session_id": "desktop:test"},
+                await runtime.bus.publish_outbound(
+                    OutboundMessage(
+                        channel="desktop",
+                        chat_id="test",
+                        content="最终回复",
+                        metadata={"_session_id": "desktop:test", "_turn_id": "turn_fake"},
+                    )
                 )
-            )
-            message = json.loads(await websocket.recv())
-            completed = json.loads(await websocket.recv())
-            assert message["type"] == "message"
-            assert message["content"] == "最终回复"
-            assert completed == {
-                "type": "turn_completed",
-                "session_id": "desktop:test",
-                "stop_reason": "completed",
-            }
+                completed = await asyncio.wait_for(_next_sse_event(lines), timeout=2.0)
+                assert completed["type"] == "turn.completed"
+                assert completed["data"]["stop_reason"] == "completed"
 
-            await websocket.send(json.dumps({"type": "list_sessions"}))
-            session_list = json.loads(await websocket.recv())
-            assert session_list["type"] == "session_list"
-            assert session_list["sessions"][0]["session_id"] == "desktop:test"
-            assert session_list["total_count"] == 1
-            assert session_list["next_page_token"] is None
-
-            await websocket.send(
-                json.dumps(
-                    {
-                        "type": "create_session",
-                        "session_id": "desktop:new",
-                        "title": "New session",
-                    }
+                await runtime.bus.publish_outbound(
+                    OutboundMessage(
+                        channel="desktop",
+                        chat_id="test",
+                        content="失败",
+                        metadata={
+                            "_session_id": "desktop:test",
+                            "_turn_id": "turn_failed",
+                            "_failed": True,
+                            "_stop_reason": "error",
+                            "_error": "provider failed",
+                        },
+                    )
                 )
-            )
-            created = json.loads(await websocket.recv())
-            assert created["type"] == "session_created"
-            assert created["session_id"] == "desktop:new"
-            assert created["title"] == "New session"
-            assert created["created_at_ms"] is not None
-
-            await websocket.send(json.dumps({"type": "delete_session", "session_id": "desktop:new"}))
-            deleted = json.loads(await websocket.recv())
-            assert deleted == {
-                "type": "session_deleted",
-                "session_id": "desktop:new",
-                "deleted": True,
-            }
-
-            await websocket.send(
-                json.dumps({"type": "load_history", "session_id": "desktop:new", "limit": 10})
-            )
-            deleted_error = json.loads(await websocket.recv())
-            assert deleted_error["type"] == "error"
-            assert deleted_error["code"] == "session_not_found"
-            assert deleted_error["command"] == "load_history"
-
-            await websocket.send(
-                json.dumps({"type": "load_history", "session_id": "desktop:test", "limit": 10})
-            )
-            history = json.loads(await websocket.recv())
-            assert history["type"] == "history_snapshot"
-            assert history["messages"][0]["content"] == "hello"
-
-            await websocket.send(json.dumps({"type": "get_status", "session_id": "desktop:test"}))
-            status = json.loads(await websocket.recv())
-            assert status["type"] == "status_result"
-            assert status["snapshot"]["model"] == "mimo-v2.5"
-
-            await websocket.send(json.dumps({"type": "interrupt_turn", "session_id": "desktop:test"}))
-            interrupt = json.loads(await websocket.recv())
-            assert interrupt["type"] == "interrupt_result"
-            assert runtime.interrupt_calls == ["desktop:test"]
+                failed = await asyncio.wait_for(_next_sse_event(lines), timeout=2.0)
+                assert failed["type"] == "turn.failed"
+                assert failed["data"]["stop_reason"] == "error"
+                assert failed["data"]["error"] == "provider failed"
     finally:
         await server.stop()
 
 
 @pytest.mark.asyncio
-async def test_remote_server_provider_state_commands() -> None:
-    config = Config()
-    config.remote.enabled = True
-    config.remote.host = "127.0.0.1"
-    config.remote.port = 8887
-    config.remote.auth_token = "secret-token"
+async def test_remote_legacy_ws_route_is_removed() -> None:
+    """旧 /ws command 面不应继续暴露。"""
     runtime = _FakeRuntime()
-    server = RemoteServer(config, runtime)  # type: ignore[arg-type]
+    server = RemoteServer(_config(8877), runtime)  # type: ignore[arg-type]
 
     await server.start()
     try:
-        async with connect(
-            "ws://127.0.0.1:8887/ws",
-            additional_headers={"Authorization": "Bearer secret-token"},
-        ) as websocket:
-            ready = json.loads(await websocket.recv())
-            assert ready["type"] == "ready"
-
-            await websocket.send(json.dumps({"type": "get_provider_state"}))
-            snapshot = json.loads(await websocket.recv())
-            assert snapshot["type"] == "provider_state_snapshot"
-            assert snapshot["provider_state"]["active"]["provider"] == "deepseek"
-            assert snapshot["provider_state"]["providers"][0]["display_name"] == "DeepSeek"
-
-            await websocket.send(json.dumps({"type": "list_providers"}))
-            provider_list = json.loads(await websocket.recv())
-            assert provider_list["type"] == "provider_list"
-            assert provider_list["provider_list"]["providers"][0]["backend"] == "deepseek"
-
-            await websocket.send(
-                json.dumps(
-                    {
-                        "type": "set_provider_settings",
-                        "provider": "custom",
-                        "api_key": "sk-demo",
-                        "api_base": "https://example.com/v1",
-                        "model": "gpt-test",
-                    }
-                )
-            )
-            updated = json.loads(await websocket.recv())
-            assert updated["type"] == "provider_settings_updated"
-            assert updated["provider"] == "custom"
-            assert updated["settings"]["saved_model"] == "gpt-test"
-            assert updated["requires_runtime_reload"] is True
-            assert runtime.provider_updates[0]["provider"] == "custom"
-
-            await websocket.send(
-                json.dumps(
-                    {
-                        "type": "update_provider",
-                        "provider": "custom",
-                        "clear_api_key": True,
-                    }
-                )
-            )
-            updated_v2 = json.loads(await websocket.recv())
-            assert updated_v2["type"] == "provider_updated"
-            assert updated_v2["provider"] == "custom"
-            assert updated_v2["settings"]["api_key_set"] is False
-
-            await websocket.send(
-                json.dumps(
-                    {
-                        "type": "set_active_provider",
-                        "provider": "minimax",
-                        "model": "MiniMax-M2.7",
-                    }
-                )
-            )
-            active = json.loads(await websocket.recv())
-            assert active["type"] == "active_provider_changed"
-            assert active["active"]["provider"] == "minimax"
-            assert active["active"]["model"] == "MiniMax-M2.7"
-            assert active["requires_runtime_reload"] is True
-
-            await websocket.send(json.dumps({"type": "reload_runtime"}))
-            reloaded = json.loads(await websocket.recv())
-            assert reloaded["type"] == "runtime_reloaded"
-            assert reloaded["active"]["provider"] == "minimax"
-            assert reloaded["provider_state"]["apply_mode"] == "reload_runtime"
-            assert runtime.runtime_reload_calls == 1
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get("http://127.0.0.1:8877/ws?token=secret-token")
+            assert response.status_code == 404
     finally:
         await server.stop()
 
 
 @pytest.mark.asyncio
-async def test_remote_server_provider_settings_validation_error_includes_fields() -> None:
-    config = Config()
-    config.remote.enabled = True
-    config.remote.host = "127.0.0.1"
-    config.remote.port = 8888
-    config.remote.auth_token = "secret-token"
+async def test_remote_sse_unknown_last_event_id_emits_single_resync() -> None:
+    """SSE 游标无法补齐时应只给当前连接发送一次 resync。"""
+    runtime = _FakeRuntime()
+    server = RemoteServer(_config(8879), runtime)  # type: ignore[arg-type]
+
+    await server.start()
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            async with client.stream(
+                "GET",
+                "http://127.0.0.1:8879/v1/events?token=secret-token",
+                headers={"Last-Event-ID": "missing"},
+            ) as stream:
+                lines = stream.aiter_lines()
+                resync = await asyncio.wait_for(_next_sse_event(lines), timeout=2.0)
+                assert resync["type"] == "runtime.resync_required"
+
+                connected = await asyncio.wait_for(_next_sse_event(lines), timeout=2.0)
+                assert connected["type"] == "runtime.connected"
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_remote_http_provider_tasks_resources_and_errors() -> None:
+    """provider、task、skill、mcp 均应走 HTTP API。"""
+    runtime = _FakeRuntime()
+    server = RemoteServer(_config(8887), runtime)  # type: ignore[arg-type]
+
+    await server.start()
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            provider_state = await client.get(
+                "http://127.0.0.1:8887/v1/providers/state", headers=_auth()
+            )
+            assert provider_state.json()["provider_state"]["active"]["provider"] == "deepseek"
+
+            updated = await client.patch(
+                "http://127.0.0.1:8887/v1/providers/custom",
+                headers=_auth(),
+                json={
+                    "api_key": "sk-demo",
+                    "api_base": "https://example.com/v1",
+                    "model": "gpt-test",
+                },
+            )
+            assert updated.status_code == 200
+            assert updated.json()["settings"]["saved_model"] == "gpt-test"
+            assert runtime.provider_updates[0]["provider"] == "custom"
+
+            active = await client.put(
+                "http://127.0.0.1:8887/v1/providers/active",
+                headers=_auth(),
+                json={"provider": "minimax", "model": "MiniMax-M2.7"},
+            )
+            assert active.json()["active"]["provider"] == "minimax"
+
+            reloaded = await client.post("http://127.0.0.1:8887/v1/runtime/reload", headers=_auth())
+            assert reloaded.json()["active"]["provider"] == "minimax"
+            assert runtime.runtime_reload_calls == 1
+
+            task = await client.post(
+                "http://127.0.0.1:8887/v1/tasks",
+                headers=_auth(),
+                json={
+                    "instruction": "提醒喝水",
+                    "source_session_key": "desktop:test",
+                    "schedule": {"kind": "every", "every_ms": 60000},
+                    "target_channels": ["weixin"],
+                },
+            )
+            assert task.status_code == 201
+            task_id = task.json()["task"]["id"]
+            assert task.json()["task"]["target_channels"] == ["weixin"]
+
+            disabled = await client.post(
+                f"http://127.0.0.1:8887/v1/tasks/{task_id}/disable", headers=_auth()
+            )
+            assert disabled.json()["task"]["enabled"] is False
+
+            upload = await client.post(
+                "http://127.0.0.1:8887/v1/skills/uploads",
+                headers=_auth(),
+                files={"file": ("demo.zip", b"fake zip content", "application/zip")},
+            )
+            assert upload.status_code == 200
+            installed = await client.post(
+                "http://127.0.0.1:8887/v1/skills",
+                headers=_auth(),
+                json={"upload_token": upload.json()["upload_token"]},
+            )
+            assert installed.json()["resource"] == "skill"
+            assert runtime.skill_sources[0].endswith(".zip")
+
+            mcp = await client.post(
+                "http://127.0.0.1:8887/v1/mcp",
+                headers=_auth(),
+                json={
+                    "name": "filesystem",
+                    "mcp": {
+                        "enabled": True,
+                        "type": "stdio",
+                        "command": "npx",
+                        "args": ["-y"],
+                        "enabled_tools": ["*"],
+                        "env": {},
+                        "headers": {},
+                    },
+                },
+            )
+            assert mcp.status_code == 201
+            assert mcp.json()["mcp"]["name"] == "filesystem"
+            assert mcp.json()["mcp"]["enabled_tools"] == ["*"]
+
+            missing = await client.get(
+                "http://127.0.0.1:8887/v1/sessions/desktop:missing", headers=_auth()
+            )
+            assert missing.status_code == 404
+            assert missing.json()["error"]["code"] == "session_not_found"
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_remote_http_validation_error_includes_fields() -> None:
+    """provider 字段级错误应出现在统一 HTTP error details 中。"""
     runtime = _FakeRuntime()
 
     def _raise_validation_error(*_args, **_kwargs):
@@ -610,427 +819,77 @@ async def test_remote_server_provider_settings_validation_error_includes_fields(
             ],
         )
 
-    runtime.set_provider_settings = _raise_validation_error  # type: ignore[method-assign]
-    server = RemoteServer(config, runtime)  # type: ignore[arg-type]
+    runtime.update_provider = _raise_validation_error  # type: ignore[method-assign]
+    server = RemoteServer(_config(8888), runtime)  # type: ignore[arg-type]
 
     await server.start()
     try:
-        async with connect(
-            "ws://127.0.0.1:8888/ws",
-            additional_headers={"Authorization": "Bearer secret-token"},
-        ) as websocket:
-            _ = json.loads(await websocket.recv())
-            await websocket.send(
-                json.dumps(
-                    {
-                        "type": "set_provider_settings",
-                        "provider": "deepseek",
-                        "api_base": "https://example.com/v1",
-                    }
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.patch(
+                "http://127.0.0.1:8888/v1/providers/deepseek",
+                headers=_auth(),
+                json={"api_base": "https://example.com/v1"},
+            )
+            assert response.status_code == 400
+            assert response.json()["error"]["code"] == "provider_api_base_not_editable"
+            assert response.json()["error"]["details"]["fields"][0]["field"] == "api_base"
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_remote_sse_session_save_and_global_task_delivery_events() -> None:
+    """SSE 应广播跨 channel session 保存和全局任务投递。"""
+    runtime = _FakeRuntime()
+    server = RemoteServer(_config(8882), runtime)  # type: ignore[arg-type]
+
+    await server.start()
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            async with client.stream(
+                "GET", "http://127.0.0.1:8882/v1/events?token=secret-token"
+            ) as stream:
+                lines = stream.aiter_lines()
+                connected = await asyncio.wait_for(_next_sse_event(lines), timeout=2.0)
+                assert connected["type"] == "runtime.connected"
+
+                session = SimpleNamespace(
+                    key="weixin:wx-user",
+                    messages=[
+                        {"role": "user", "content": "微信消息", "timestamp": "2026-05-13T12:00:00"}
+                    ],
                 )
-            )
-            error = json.loads(await websocket.recv())
-            assert error["type"] == "error"
-            assert error["code"] == "provider_api_base_not_editable"
-            assert error["command"] == "set_provider_settings"
-            assert error["fields"][0]["field"] == "api_base"
-    finally:
-        await server.stop()
+                runtime.sessions["weixin:wx-user"] = {
+                    "key": "weixin:wx-user",
+                    "session_id": "weixin:wx-user",
+                    "title": None,
+                    "created_at_ms": 1,
+                    "updated_at_ms": 2,
+                    "message_count": 1,
+                    "archived": False,
+                    "source": "weixin",
+                }
+                runtime.agent_loop.sessions.emit_saved(session, session.messages)
+                appended = await asyncio.wait_for(_next_sse_event(lines), timeout=2.0)
+                assert appended["type"] == "session.message_appended"
+                assert appended["data"]["session_id"] == "weixin:wx-user"
+                updated = await asyncio.wait_for(_next_sse_event(lines), timeout=2.0)
+                assert updated["type"] == "session.updated"
 
-
-@pytest.mark.asyncio
-async def test_remote_server_allows_query_token_for_browser_demo() -> None:
-    config = Config()
-    config.remote.enabled = True
-    config.remote.host = "127.0.0.1"
-    config.remote.port = 8878
-    config.remote.auth_token = "secret-token"
-    runtime = _FakeRuntime()
-    server = RemoteServer(config, runtime)  # type: ignore[arg-type]
-
-    await server.start()
-    try:
-        async with connect("ws://127.0.0.1:8878/ws?token=secret-token") as websocket:
-            ready = json.loads(await websocket.recv())
-            assert ready["type"] == "ready"
-    finally:
-        await server.stop()
-
-
-@pytest.mark.asyncio
-async def test_remote_server_rebinds_to_single_current_session() -> None:
-    config = Config()
-    config.remote.enabled = True
-    config.remote.host = "127.0.0.1"
-    config.remote.port = 8879
-    config.remote.auth_token = "secret-token"
-    runtime = _FakeRuntime()
-    server = RemoteServer(config, runtime)  # type: ignore[arg-type]
-
-    await server.start()
-    try:
-        async with connect(
-            "ws://127.0.0.1:8879/ws",
-            additional_headers={"Authorization": "Bearer secret-token"},
-        ) as websocket:
-            ready = json.loads(await websocket.recv())
-            assert ready["type"] == "ready"
-
-            runtime.create_session("desktop:one")
-            runtime.create_session("desktop:two")
-
-            await websocket.send(json.dumps({"type": "bind_session", "session_id": "desktop:one"}))
-            bound_one = json.loads(await websocket.recv())
-            assert bound_one == {"type": "session_bound", "session_id": "desktop:one"}
-
-            await websocket.send(json.dumps({"type": "bind_session", "session_id": "desktop:two"}))
-            bound_two = json.loads(await websocket.recv())
-            assert bound_two == {"type": "session_bound", "session_id": "desktop:two"}
-
-            await runtime.bus.publish_outbound(
-                OutboundMessage(
-                    channel="desktop",
-                    chat_id="one",
-                    content="旧会话消息",
-                    metadata={"_session_id": "desktop:one"},
-                )
-            )
-            await runtime.bus.publish_outbound(
-                OutboundMessage(
-                    channel="desktop",
-                    chat_id="two",
-                    content="当前会话消息",
-                    metadata={"_session_id": "desktop:two"},
-                )
-            )
-
-            current = json.loads(await websocket.recv())
-            assert current["type"] == "message"
-            assert current["session_id"] == "desktop:two"
-            assert current["content"] == "当前会话消息"
-    finally:
-        await server.stop()
-
-
-@pytest.mark.asyncio
-async def test_remote_server_bind_session_rejects_missing_session() -> None:
-    config = Config()
-    config.remote.enabled = True
-    config.remote.host = "127.0.0.1"
-    config.remote.port = 8882
-    config.remote.auth_token = "secret-token"
-    runtime = _FakeRuntime()
-    server = RemoteServer(config, runtime)  # type: ignore[arg-type]
-
-    await server.start()
-    try:
-        async with connect(
-            "ws://127.0.0.1:8882/ws",
-            additional_headers={"Authorization": "Bearer secret-token"},
-        ) as websocket:
-            await websocket.recv()
-
-            await websocket.send(json.dumps({"type": "bind_session", "session_id": "desktop:missing"}))
-            error = json.loads(await websocket.recv())
-            assert error["type"] == "error"
-            assert error["code"] == "session_not_found"
-            assert error["command"] == "bind_session"
-            assert error["session_id"] == "desktop:missing"
-    finally:
-        await server.stop()
-
-
-@pytest.mark.asyncio
-async def test_remote_server_session_management_errors() -> None:
-    config = Config()
-    config.remote.enabled = True
-    config.remote.host = "127.0.0.1"
-    config.remote.port = 8875
-    config.remote.auth_token = "secret-token"
-    runtime = _FakeRuntime()
-    server = RemoteServer(config, runtime)  # type: ignore[arg-type]
-
-    await server.start()
-    try:
-        async with connect(
-            "ws://127.0.0.1:8875/ws",
-            additional_headers={"Authorization": "Bearer secret-token"},
-        ) as websocket:
-            await websocket.recv()
-
-            await websocket.send(json.dumps({"type": "list_sessions", "page_token": "bad-token"}))
-            error = json.loads(await websocket.recv())
-            assert error["type"] == "error"
-            assert error["code"] == "invalid_page_token"
-            assert error["command"] == "list_sessions"
-
-            await websocket.send(
-                json.dumps({"type": "load_history", "session_id": "desktop:missing", "limit": 10})
-            )
-            error = json.loads(await websocket.recv())
-            assert error["code"] == "session_not_found"
-            assert error["command"] == "load_history"
-
-            await websocket.send(
-                json.dumps(
-                    {
-                        "type": "create_session",
-                        "session_id": "desktop:test",
-                        "title": "dup",
-                    }
-                )
-            )
-            error = json.loads(await websocket.recv())
-            assert error["code"] == "duplicate_session_id"
-            assert error["command"] == "create_session"
-
-            await websocket.send(json.dumps({"type": "bind_session", "session_id": "desktop:test"}))
-            await websocket.recv()
-            await websocket.send(json.dumps({"type": "delete_session", "session_id": "desktop:test"}))
-            error = json.loads(await websocket.recv())
-            assert error["code"] == "session_delete_forbidden"
-            assert error["command"] == "delete_session"
-    finally:
-        await server.stop()
-
-
-@pytest.mark.asyncio
-async def test_remote_server_health_endpoint() -> None:
-    import httpx
-
-    config = Config()
-    config.remote.enabled = True
-    config.remote.host = "127.0.0.1"
-    config.remote.port = 8877
-    config.remote.auth_token = "secret-token"
-    runtime = _FakeRuntime()
-    server = RemoteServer(config, runtime)  # type: ignore[arg-type]
-
-    await server.start()
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get("http://127.0.0.1:8877/health")
-        assert response.status_code == 200
-        assert response.json() == {"ok": True}
-    finally:
-        await server.stop()
-
-
-@pytest.mark.asyncio
-async def test_remote_server_sidebar_and_resource_commands() -> None:
-    config = Config()
-    config.remote.enabled = True
-    config.remote.host = "127.0.0.1"
-    config.remote.port = 8880
-    config.remote.auth_token = "secret-token"
-    runtime = _FakeRuntime()
-    server = RemoteServer(config, runtime)  # type: ignore[arg-type]
-
-    await server.start()
-    try:
-        async with connect(
-            "ws://127.0.0.1:8880/ws",
-            additional_headers={"Authorization": "Bearer secret-token"},
-        ) as websocket:
-            ready = json.loads(await websocket.recv())
-            assert ready["type"] == "ready"
-
-            await websocket.send(json.dumps({"type": "bind_session", "session_id": "desktop:test"}))
-            bound = json.loads(await websocket.recv())
-            assert bound["type"] == "session_bound"
-
-            await websocket.send(json.dumps({"type": "get_sidebar", "session_id": "desktop:test"}))
-            sidebar = json.loads(await websocket.recv())
-            assert sidebar == {
-                "type": "sidebar_snapshot",
-                "session_id": "desktop:test",
-                "sidebar": {"tasks": [], "skills": [], "mcpServers": []},
-            }
-
-            await websocket.send(
-                json.dumps(
-                    {
-                        "type": "task_create_every",
-                        "session_id": "desktop:test",
-                        "instruction": "提醒喝水",
-                        "every_seconds": 60,
-                    }
-                )
-            )
-            action = json.loads(await websocket.recv())
-            snapshot = json.loads(await websocket.recv())
-            assert action["type"] == "resource_action_result"
-            assert action["resource"] == "task"
-            assert action["action"] == "create_every"
-            assert snapshot["type"] == "sidebar_snapshot"
-            assert snapshot["sidebar"]["tasks"][0]["id"] == "task_every"
-
-            await websocket.send(
-                json.dumps(
-                    {
-                        "type": "mcp_create",
-                        "session_id": "desktop:test",
-                        "mcp_name": "filesystem",
-                        "mcp": {
-                            "enabled": True,
-                            "type": "stdio",
-                            "command": "npx",
-                            "args": ["-y", "@modelcontextprotocol/server-filesystem"],
-                            "url": "",
-                            "enabled_tools": ["*"],
-                            "env": {},
-                            "headers": {},
+                await runtime.bus.publish_outbound(
+                    OutboundMessage(
+                        channel="weixin",
+                        chat_id="wx-user",
+                        content="全局提醒",
+                        metadata={
+                            "_task_delivery_id": "task_1",
+                            "_global_reminder_broadcast": True,
+                            "_session_id": "desktop:test",
                         },
-                    }
+                    )
                 )
-            )
-            action = json.loads(await websocket.recv())
-            snapshot = json.loads(await websocket.recv())
-            assert action["resource"] == "mcp"
-            assert action["action"] == "create"
-            assert snapshot["sidebar"]["mcpServers"][0]["name"] == "filesystem"
-
-            await websocket.send(
-                json.dumps(
-                    {
-                        "type": "clear_remote_runtime",
-                        "session_id": "desktop:test",
-                    }
-                )
-            )
-            action = json.loads(await websocket.recv())
-            snapshot = json.loads(await websocket.recv())
-            assert action["action"] == "clear_remote_runtime"
-            assert runtime.clear_calls == 1
-            assert snapshot["sidebar"] == {"tasks": [], "skills": [], "mcpServers": []}
-    finally:
-        await server.stop()
-
-
-@pytest.mark.asyncio
-async def test_remote_server_skill_upload_and_install() -> None:
-    import httpx
-
-    config = Config()
-    config.remote.enabled = True
-    config.remote.host = "127.0.0.1"
-    config.remote.port = 8881
-    config.remote.auth_token = "secret-token"
-    runtime = _FakeRuntime()
-    server = RemoteServer(config, runtime)  # type: ignore[arg-type]
-
-    await server.start()
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                "http://127.0.0.1:8881/skills/upload",
-                headers={"Authorization": "Bearer secret-token"},
-                files={"file": ("demo-skill.zip", b"fake zip content", "application/zip")},
-            )
-            assert response.status_code == 200
-            upload_token = response.json()["upload_token"]
-
-        async with connect(
-            "ws://127.0.0.1:8881/ws",
-            additional_headers={"Authorization": "Bearer secret-token"},
-        ) as websocket:
-            await websocket.recv()
-            await websocket.send(json.dumps({"type": "bind_session", "session_id": "desktop:test"}))
-            await websocket.recv()
-            await websocket.send(
-                json.dumps(
-                    {
-                        "type": "skill_install",
-                        "session_id": "desktop:test",
-                        "upload_token": upload_token,
-                    }
-                )
-            )
-            action = json.loads(await websocket.recv())
-            snapshot = json.loads(await websocket.recv())
-            assert action["type"] == "resource_action_result"
-            assert action["resource"] == "skill"
-            assert action["action"] == "install"
-            assert runtime.skill_sources[0].endswith(".zip")
-            assert snapshot["sidebar"]["skills"][0]["name"] == "demo-skill"
-    finally:
-        await server.stop()
-
-
-@pytest.mark.asyncio
-async def test_remote_task_delivery_broadcasts_global_reminder_to_all_clients() -> None:
-    config = Config()
-    config.remote.enabled = True
-    config.remote.host = "127.0.0.1"
-    config.remote.port = 8882
-    config.remote.auth_token = "secret-token"
-    runtime = _FakeRuntime()
-    server = RemoteServer(config, runtime)  # type: ignore[arg-type]
-
-    await server.start()
-    try:
-        async with connect(
-            "ws://127.0.0.1:8882/ws",
-            additional_headers={"Authorization": "Bearer secret-token"},
-        ) as ws1, connect(
-            "ws://127.0.0.1:8882/ws",
-            additional_headers={"Authorization": "Bearer secret-token"},
-        ) as ws2:
-            await ws1.recv()
-            await ws2.recv()
-
-            await runtime.bus.publish_outbound(
-                OutboundMessage(
-                    channel="remote",
-                    chat_id="desktop:test",
-                    content="全局提醒",
-                    metadata={
-                        "_task_delivery_id": "task_1",
-                        "_global_reminder_broadcast": True,
-                        "_session_id": "desktop:test",
-                    },
-                )
-            )
-
-            event1 = json.loads(await ws1.recv())
-            event2 = json.loads(await ws2.recv())
-            assert event1["type"] == "task_delivered"
-            assert event2["type"] == "task_delivered"
-            assert event1["content"] == "全局提醒"
-            assert event2["task_id"] == "task_1"
-    finally:
-        await server.stop()
-
-
-@pytest.mark.asyncio
-async def test_remote_bridge_ignores_channel_adapter_messages() -> None:
-    config = Config()
-    config.remote.enabled = True
-    config.remote.host = "127.0.0.1"
-    config.remote.port = 8881
-    config.remote.auth_token = "secret-token"
-    runtime = _FakeRuntime()
-    server = RemoteServer(config, runtime)  # type: ignore[arg-type]
-
-    await server.start()
-    try:
-        async with connect(
-            "ws://127.0.0.1:8881/ws",
-            additional_headers={"Authorization": "Bearer secret-token"},
-        ) as websocket:
-            ready = json.loads(await websocket.recv())
-            assert ready["type"] == "ready"
-
-            await runtime.bus.publish_outbound(
-                OutboundMessage(
-                    channel="weixin",
-                    chat_id="wx-user",
-                    content="微信专属消息",
-                    metadata={"_session_id": "weixin:wx-user"},
-                )
-            )
-
-            with pytest.raises(TimeoutError):
-                await asyncio.wait_for(websocket.recv(), timeout=0.1)
+                delivered = await asyncio.wait_for(_next_sse_event(lines), timeout=2.0)
+                assert delivered["type"] == "task.delivered"
+                assert delivered["data"]["content"] == "全局提醒"
     finally:
         await server.stop()

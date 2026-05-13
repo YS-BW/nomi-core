@@ -194,7 +194,7 @@ runtime 状态文件：
 
 ## 5. 启用 remote
 
-remote 是给 desktop 或其他远程客户端连接的 WebSocket adapter。
+remote 是给 desktop 或其他远程客户端连接的 HTTP API + SSE adapter。
 
 启用默认 remote 配置：
 
@@ -242,16 +242,17 @@ nomi instance restart
 
 默认 remote 配置定义在 [../nomi/config/schema/remote.py#L8-L14](../nomi/config/schema/remote.py#L8-L14)。
 
-默认 WebSocket 地址：
+默认 HTTP API 地址：
 
 ```text
-ws://127.0.0.1:8765/ws
+http://127.0.0.1:8765/v1/bootstrap
+http://127.0.0.1:8765/v1/events
 ```
 
-浏览器或 desktop smoke 可以用 query token：
+浏览器 SSE smoke 可以用 query token：
 
 ```text
-ws://127.0.0.1:8765/ws?token=<token>
+http://127.0.0.1:8765/v1/events?token=<token>
 ```
 
 非浏览器客户端优先使用 Bearer Token：

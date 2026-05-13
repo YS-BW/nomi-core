@@ -2,6 +2,7 @@
 
 import json
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -27,18 +28,13 @@ class Session:
 
     def add_message(self, role: str, content: str, **kwargs: Any) -> None:
         """向会话追加一条消息。"""
-        msg = {
-            "role": role,
-            "content": content,
-            "timestamp": datetime.now().isoformat(),
-            **kwargs
-        }
+        msg = {"role": role, "content": content, "timestamp": datetime.now().isoformat(), **kwargs}
         self.messages.append(msg)
         self.updated_at = datetime.now()
 
     def get_history(self, max_messages: int = 500) -> list[dict[str, Any]]:
         """返回适合送入模型的未归档消息历史。"""
-        unconsolidated = self.messages[self.last_consolidated:]
+        unconsolidated = self.messages[self.last_consolidated :]
         if max_messages <= 0:
             sliced = list(unconsolidated)
         else:
@@ -58,7 +54,14 @@ class Session:
         out: list[dict[str, Any]] = []
         for message in sliced:
             entry: dict[str, Any] = {"role": message["role"], "content": message.get("content", "")}
-            for key in ("tool_calls", "tool_call_id", "name", "reasoning_content", "reasoning_items", "thinking_blocks"):
+            for key in (
+                "tool_calls",
+                "tool_call_id",
+                "name",
+                "reasoning_content",
+                "reasoning_items",
+                "thinking_blocks",
+            ):
                 if key in message:
                     entry[key] = message[key]
             out.append(entry)
@@ -114,6 +117,8 @@ class SessionManager:
         self.workspace = workspace
         self.sessions_dir = ensure_dir(self.workspace / "sessions")
         self._cache: dict[str, Session] = {}
+        self._subscribers: dict[int, Callable[[str, Session, list[dict[str, Any]]], None]] = {}
+        self._next_subscriber_id = 0
 
     def _get_session_path(self, key: str) -> Path:
         """Get the file path for a session."""
@@ -262,8 +267,16 @@ class SessionManager:
 
                     if data.get("_type") == "metadata":
                         metadata = data.get("metadata", {})
-                        created_at = datetime.fromisoformat(data["created_at"]) if data.get("created_at") else None
-                        updated_at = datetime.fromisoformat(data["updated_at"]) if data.get("updated_at") else None
+                        created_at = (
+                            datetime.fromisoformat(data["created_at"])
+                            if data.get("created_at")
+                            else None
+                        )
+                        updated_at = (
+                            datetime.fromisoformat(data["updated_at"])
+                            if data.get("updated_at")
+                            else None
+                        )
                         last_consolidated = data.get("last_consolidated", 0)
                     else:
                         messages.append(data)
@@ -274,7 +287,7 @@ class SessionManager:
                 created_at=created_at or datetime.now(),
                 updated_at=updated_at or datetime.now(),
                 metadata=metadata,
-                last_consolidated=last_consolidated
+                last_consolidated=last_consolidated,
             )
         except Exception as e:
             logger.warning("Failed to load session {}: {}", key, e)
@@ -282,6 +295,7 @@ class SessionManager:
 
     def save(self, session: Session) -> None:
         """把会话写回磁盘。"""
+        old_count = self._message_count_from_disk(session.key)
         path = self._get_session_path(session.key)
 
         with open(path, "w", encoding="utf-8") as f:
@@ -291,17 +305,52 @@ class SessionManager:
                 "created_at": session.created_at.isoformat(),
                 "updated_at": session.updated_at.isoformat(),
                 "metadata": session.metadata,
-                "last_consolidated": session.last_consolidated
+                "last_consolidated": session.last_consolidated,
             }
             f.write(json.dumps(metadata_line, ensure_ascii=False) + "\n")
             for msg in session.messages:
                 f.write(json.dumps(msg, ensure_ascii=False) + "\n")
 
         self._cache[session.key] = session
+        self._notify_saved(session, old_count=old_count)
 
     def invalidate(self, key: str) -> None:
         """移除内存缓存中的会话。"""
         self._cache.pop(key, None)
+
+    def subscribe_changes(
+        self,
+        callback: Callable[[str, Session, list[dict[str, Any]]], None],
+    ) -> Callable[[], None]:
+        """订阅 session 持久化变更。"""
+        subscriber_id = self._next_subscriber_id
+        self._next_subscriber_id += 1
+        self._subscribers[subscriber_id] = callback
+
+        def _unsubscribe() -> None:
+            self._subscribers.pop(subscriber_id, None)
+
+        return _unsubscribe
+
+    def _message_count_from_disk(self, key: str) -> int:
+        """返回磁盘上已有消息条数。"""
+        cached = self._cache.get(key)
+        path = self._get_session_path(key)
+        if not path.exists():
+            return 0
+        loaded = self._load(key)
+        if cached is not None:
+            self._cache[key] = cached
+        return len(loaded.messages) if loaded is not None else 0
+
+    def _notify_saved(self, session: Session, *, old_count: int) -> None:
+        """通知订阅者 session 已保存。"""
+        new_messages = [dict(item) for item in session.messages[old_count:]]
+        for callback in list(self._subscribers.values()):
+            try:
+                callback("saved", session, new_messages)
+            except Exception:
+                continue
 
     def list_sessions(self) -> list[dict[str, Any]]:
         """列出所有已持久化会话。"""

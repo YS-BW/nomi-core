@@ -157,7 +157,9 @@ def test_runtime_missing_session_raises_session_not_found(tmp_path: Path) -> Non
         runtime.load_session_messages("desktop:missing", limit=1)
 
 
-def test_runtime_provider_settings_persist_to_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_runtime_provider_settings_persist_to_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     config = Config()
     config.agents.defaults.workspace = str(tmp_path / "workspace")
     config.agents.defaults.provider = "deepseek"
@@ -290,7 +292,9 @@ def test_runtime_sidebar_serializes_task_target_channels(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
-async def test_runtime_set_active_provider_and_reload_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_runtime_set_active_provider_and_reload_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     config = Config()
     config.agents.defaults.workspace = str(tmp_path / "workspace")
     config.agents.defaults.provider = "deepseek"

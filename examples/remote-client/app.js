@@ -1,5 +1,5 @@
 const state = {
-  socket: null,
+  eventSource: null,
   connection: {
     status: "disconnected",
     host: "127.0.0.1",
@@ -42,7 +42,29 @@ function escapeHtml(text) {
 }
 
 function isConnected() {
-  return Boolean(state.socket) && state.socket.readyState === WebSocket.OPEN;
+  return Boolean(state.eventSource) && state.connection.status === "connected";
+}
+
+function baseUrl() {
+  return `http://${state.connection.host}:${state.connection.port}`;
+}
+
+function apiHeaders() {
+  return state.connection.token ? { Authorization: `Bearer ${state.connection.token}` } : {};
+}
+
+async function api(path, options = {}) {
+  const headers = { ...apiHeaders(), ...(options.headers || {}) };
+  if (options.body && !headers["Content-Type"]) {
+    headers["Content-Type"] = "application/json";
+  }
+  const response = await fetch(`${baseUrl()}${path}`, { ...options, headers });
+  const text = await response.text();
+  const payload = text ? JSON.parse(text) : {};
+  if (!response.ok) {
+    throw new Error(payload?.error?.message || `HTTP ${response.status}`);
+  }
+  return payload;
 }
 
 function setConnectionStatus(status, detail = "") {
@@ -56,7 +78,7 @@ function setConnectionStatus(status, detail = "") {
 function syncControls() {
   const connected = isConnected();
   els.connectBtn.disabled = connected || state.connection.status === "connecting";
-  els.disconnectBtn.disabled = !state.socket;
+  els.disconnectBtn.disabled = !state.eventSource;
   els.sendBtn.disabled = !connected;
   els.interruptBtn.disabled = !connected;
   els.refreshSessionsBtn.disabled = !connected;
@@ -90,11 +112,7 @@ function renderMessages() {
   for (const message of state.messages) {
     const card = document.createElement("div");
     card.className = `message-card ${message.kind}`;
-    const meta = [
-      message.role || message.kind,
-      message.status || "final",
-      message.sessionId,
-    ]
+    const meta = [message.role || message.kind, message.status || "final", message.sessionId]
       .filter(Boolean)
       .join(" · ");
     card.innerHTML = `
@@ -110,9 +128,9 @@ function renderSessions() {
   els.sessionList.innerHTML = "";
   for (const session of state.sessions) {
     const option = document.createElement("option");
-    option.value = session.key;
-    option.textContent = session.key;
-    if (session.key === state.currentSessionId) {
+    option.value = session.session_id || session.key;
+    option.textContent = `${option.value} (${session.message_count ?? 0})`;
+    if (option.value === state.currentSessionId) {
       option.selected = true;
     }
     els.sessionList.appendChild(option);
@@ -147,14 +165,21 @@ function pushMessage(message) {
   renderMessages();
 }
 
-function addUserMessage(sessionId, content) {
+function addMessageFromSessionEvent(sessionId, message) {
+  if (sessionId !== state.currentSessionId) {
+    return;
+  }
   pushMessage({
-    kind: "user",
-    role: "user",
+    kind: message.role === "assistant" ? "assistant" : "user",
+    role: message.role,
     sessionId,
-    content,
-    status: "sent",
+    content: message.content || "",
+    status: "live",
   });
+}
+
+function addUserMessage(sessionId, content) {
+  pushMessage({ kind: "user", role: "user", sessionId, content, status: "queued" });
 }
 
 function addProgressMessage(sessionId, content, toolHint) {
@@ -205,27 +230,6 @@ function appendDelta(sessionId, content) {
   renderMessages();
 }
 
-function finalizeTurnMessage(sessionId, content) {
-  const turn = ensureActiveTurn(sessionId);
-  if (turn.messageIndex === null) {
-    state.messages.push({
-      kind: "assistant",
-      role: "assistant",
-      sessionId,
-      content: content || "",
-      status: "final",
-    });
-    renderMessages();
-    return;
-  }
-  const target = state.messages[turn.messageIndex];
-  if (target) {
-    target.content = content || target.content || turn.draftText;
-    target.status = "final";
-  }
-  renderMessages();
-}
-
 function markTurnCompleted(sessionId, stopReason) {
   if (!state.activeTurn || state.activeTurn.sessionId !== sessionId) {
     return;
@@ -253,101 +257,100 @@ function replaceHistory(sessionId, messages) {
   renderMessages();
 }
 
-function sendCommand(command) {
-  if (!isConnected()) {
-    logEvent("local-error", { message: "socket is not connected" });
-    return false;
+function mergeSession(session) {
+  const sessionId = session.session_id || session.key;
+  const index = state.sessions.findIndex((item) => (item.session_id || item.key) === sessionId);
+  if (index >= 0) {
+    state.sessions[index] = session;
+  } else {
+    state.sessions.unshift(session);
   }
-  state.socket.send(JSON.stringify(command));
-  logEvent("command", command);
-  return true;
+  renderSessions();
 }
 
-function bindCurrentSession() {
-  const sessionId = els.sessionId.value.trim();
-  if (!sessionId) {
-    setConnectionStatus("error", "session_id 不能为空");
-    return;
-  }
-  setCurrentSession(sessionId);
-  sendCommand({ type: "bind_session", session_id: sessionId });
-}
-
-function handleEvent(event) {
-  logEvent(event.type, event);
-  switch (event.type) {
-    case "ready":
-      setConnectionStatus("connected", `已连接到 ${event.host}:${event.port}`);
+function handleSseEnvelope(envelope) {
+  logEvent(envelope.type, envelope);
+  const data = envelope.data || {};
+  switch (envelope.type) {
+    case "runtime.connected":
+      setConnectionStatus("connected", `已连接到 ${baseUrl()}`);
       break;
-    case "session_bound":
-      setCurrentSession(event.session_id);
-      setStatusText("session bound", event);
+    case "runtime.resync_required":
+      loadBootstrap();
       break;
-    case "turn_started":
-      ensureActiveTurn(event.session_id);
+    case "session.created":
+    case "session.updated":
+      mergeSession(data.session);
       break;
-    case "progress":
-      addProgressMessage(event.session_id, event.content || "", Boolean(event.tool_hint));
-      break;
-    case "delta":
-      appendDelta(event.session_id, event.content || "");
-      break;
-    case "stream_end":
-      setStatusText("stream end", event);
-      break;
-    case "message":
-      finalizeTurnMessage(event.session_id, event.content || "");
-      break;
-    case "turn_completed":
-      markTurnCompleted(event.session_id, event.stop_reason || "completed");
-      setStatusText("turn completed", event);
-      break;
-    case "interrupt_result":
-      setStatusText("interrupt result", event.result || event);
-      break;
-    case "status_result":
-      setStatusText("status result", event.snapshot || event);
-      break;
-    case "history_snapshot":
-      replaceHistory(event.session_id, event.messages || []);
-      setStatusText("history snapshot", {
-        session_id: event.session_id,
-        total_messages: event.total_messages,
-        cursor: event.cursor,
-        next_cursor: event.next_cursor,
-      });
-      break;
-    case "session_list":
-      state.sessions = event.sessions || [];
+    case "session.deleted":
+      state.sessions = state.sessions.filter(
+        (item) => (item.session_id || item.key) !== data.session?.session_id,
+      );
       renderSessions();
-      setStatusText("session list", event.sessions || []);
       break;
-    case "task_delivered":
-      addTaskMessage(event.session_id, event.task_id, event.content || "");
+    case "session.message_appended":
+      addMessageFromSessionEvent(data.session_id, data.message || {});
       break;
-    case "error":
-      setConnectionStatus("error", event.message || "未知错误");
-      setStatusText("error", event);
+    case "turn.started":
+      ensureActiveTurn(data.session_id);
+      break;
+    case "turn.progress":
+      addProgressMessage(data.session_id, data.content || "", Boolean(data.tool_hint));
+      break;
+    case "turn.delta":
+      appendDelta(data.session_id, data.content || "");
+      break;
+    case "turn.stream_end":
+      setStatusText("stream end", data);
+      break;
+    case "turn.completed":
+    case "turn.failed":
+    case "turn.interrupted":
+      markTurnCompleted(data.session_id, data.stop_reason || envelope.type);
+      setStatusText(envelope.type, data);
+      break;
+    case "task.delivered":
+      addTaskMessage(data.session_id, data.task_id, data.content || "");
+      break;
+    case "sidebar.snapshot":
+      setStatusText("sidebar", data.sidebar || data);
       break;
     default:
-      setStatusText("unhandled event", event);
+      setStatusText("event", envelope);
       break;
   }
 }
 
 function disconnectRemote() {
-  if (state.socket) {
-    try {
-      state.socket.close();
-    } catch (error) {
-      logEvent("disconnect-error", { message: String(error) });
-    }
+  if (state.eventSource) {
+    state.eventSource.close();
   }
-  state.socket = null;
+  state.eventSource = null;
   setConnectionStatus("disconnected", "连接已断开");
 }
 
-function connectRemote() {
+async function ensureCurrentSession() {
+  try {
+    await api(`/v1/sessions/${encodeURIComponent(state.currentSessionId)}`);
+  } catch (_error) {
+    await api("/v1/sessions", {
+      method: "POST",
+      body: JSON.stringify({
+        session_id: state.currentSessionId,
+        title: state.currentSessionId,
+      }),
+    });
+  }
+}
+
+async function loadBootstrap() {
+  const bootstrap = await api("/v1/bootstrap");
+  state.sessions = bootstrap.sessions || [];
+  renderSessions();
+  setStatusText("bootstrap", bootstrap.status || bootstrap);
+}
+
+async function connectRemote() {
   const host = els.host.value.trim();
   const port = els.port.value.trim();
   const token = els.token.value.trim();
@@ -364,37 +367,62 @@ function connectRemote() {
 
   disconnectRemote();
   setCurrentSession(sessionId);
-  setConnectionStatus("connecting", "正在建立连接...");
+  setConnectionStatus("connecting", "正在拉取 bootstrap...");
 
-  const url = new URL(`ws://${host}:${port}/ws`);
-  url.searchParams.set("token", token);
-  const socket = new WebSocket(url.toString());
-  state.socket = socket;
-  syncControls();
+  try {
+    await ensureCurrentSession();
+    await loadBootstrap();
+    const url = new URL(`${baseUrl()}/v1/events`);
+    url.searchParams.set("token", token);
+    const eventSource = new EventSource(url.toString());
+    state.eventSource = eventSource;
 
-  socket.addEventListener("open", () => {
-    bindCurrentSession();
-  });
+    eventSource.addEventListener("open", () => {
+      setConnectionStatus("connected", `SSE 已连接到 ${baseUrl()}`);
+    });
+    eventSource.addEventListener("error", () => {
+      setConnectionStatus("error", "SSE 连接失败或已断开");
+    });
 
-  socket.addEventListener("message", (raw) => {
-    try {
-      handleEvent(JSON.parse(raw.data));
-    } catch (error) {
-      logEvent("parse-error", { message: String(error), raw: raw.data });
+    for (const type of [
+      "runtime.connected",
+      "runtime.resync_required",
+      "session.created",
+      "session.updated",
+      "session.deleted",
+      "session.message_appended",
+      "turn.started",
+      "turn.progress",
+      "turn.delta",
+      "turn.stream_end",
+      "turn.completed",
+      "turn.failed",
+      "turn.interrupted",
+      "task.created",
+      "task.updated",
+      "task.deleted",
+      "task.delivered",
+      "provider.state_changed",
+      "provider.settings_updated",
+      "provider.active_changed",
+      "sidebar.snapshot",
+      "skill.installed",
+      "skill.uninstalled",
+      "mcp.created",
+      "mcp.updated",
+      "mcp.deleted",
+      "mcp.enabled",
+      "mcp.disabled",
+    ]) {
+      eventSource.addEventListener(type, (raw) => handleSseEnvelope(JSON.parse(raw.data)));
     }
-  });
-
-  socket.addEventListener("close", () => {
-    state.socket = null;
-    setConnectionStatus("disconnected", "连接已断开");
-  });
-
-  socket.addEventListener("error", () => {
-    setConnectionStatus("error", "WebSocket 连接失败");
-  });
+  } catch (error) {
+    setConnectionStatus("error", String(error));
+    logEvent("connect-error", { message: String(error) });
+  }
 }
 
-function sendCurrentMessage() {
+async function sendCurrentMessage() {
   const sessionId = els.sessionId.value.trim();
   const content = els.messageInput.value.trim();
   if (!sessionId || !content) {
@@ -403,41 +431,58 @@ function sendCurrentMessage() {
   setCurrentSession(sessionId);
   addUserMessage(sessionId, content);
   resetActiveTurn();
-  const ok = sendCommand({
-    type: "send_message",
-    session_id: sessionId,
-    content,
-    client_id: "remote-client-demo",
-  });
-  if (ok) {
+  try {
+    const response = await api(`/v1/sessions/${encodeURIComponent(sessionId)}/turns`, {
+      method: "POST",
+      body: JSON.stringify({ content, client_id: "remote-client-demo" }),
+    });
+    logEvent("http.turns", response);
     els.messageInput.value = "";
+  } catch (error) {
+    logEvent("send-error", { message: String(error) });
   }
 }
 
-function loadHistory() {
-  sendCommand({
-    type: "load_history",
-    session_id: state.currentSessionId,
-    limit: 100,
-  });
+async function loadHistory() {
+  try {
+    const payload = await api(
+      `/v1/sessions/${encodeURIComponent(state.currentSessionId)}/messages?limit=100`,
+    );
+    replaceHistory(payload.session_id, payload.messages || []);
+    setStatusText("messages", payload);
+  } catch (error) {
+    logEvent("history-error", { message: String(error) });
+  }
 }
 
-function requestStatus() {
-  sendCommand({
-    type: "get_status",
-    session_id: state.currentSessionId,
-  });
+async function requestStatus() {
+  try {
+    setStatusText("status", await api("/v1/status"));
+  } catch (error) {
+    logEvent("status-error", { message: String(error) });
+  }
 }
 
-function requestSessions() {
-  sendCommand({ type: "list_sessions" });
+async function requestSessions() {
+  try {
+    const payload = await api("/v1/sessions");
+    state.sessions = payload.sessions || [];
+    renderSessions();
+    setStatusText("sessions", payload);
+  } catch (error) {
+    logEvent("sessions-error", { message: String(error) });
+  }
 }
 
-function interruptTurn() {
-  sendCommand({
-    type: "interrupt_turn",
-    session_id: state.currentSessionId,
-  });
+async function interruptTurn() {
+  try {
+    const payload = await api(`/v1/sessions/${encodeURIComponent(state.currentSessionId)}/interrupt`, {
+      method: "POST",
+    });
+    setStatusText("interrupt", payload);
+  } catch (error) {
+    logEvent("interrupt-error", { message: String(error) });
+  }
 }
 
 els.connectBtn.addEventListener("click", connectRemote);
@@ -452,7 +497,6 @@ els.sessionList.addEventListener("change", () => {
     return;
   }
   setCurrentSession(els.sessionList.value);
-  bindCurrentSession();
   loadHistory();
 });
 els.messageInput.addEventListener("keydown", (event) => {

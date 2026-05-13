@@ -5,11 +5,14 @@ from __future__ import annotations
 import base64
 import json
 import shutil
+import time
+import uuid
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from nomi import __version__
 from nomi.agent.loop import AgentLoop
 from nomi.agent.skills.manager import SkillManager
 from nomi.bus.events import InboundMessage, OutboundMessage
@@ -18,10 +21,15 @@ from nomi.config.loader import get_config_path, load_config, resolve_config_env_
 from nomi.config.paths import get_data_dir
 from nomi.config.schema import Config
 from nomi.config.schema.tools import MCPServerConfig
+from nomi.cron.types import CronSchedule
 from nomi.providers.base import LLMProvider
 from nomi.providers.capabilities.transcription import build_transcription_provider
 from nomi.providers.factory.build import build_provider
-from nomi.providers.factory.registry import build_provider_state, find_by_name
+from nomi.providers.factory.registry import (
+    build_provider_catalog,
+    build_provider_state,
+    find_by_name,
+)
 from nomi.runtime.errors import (
     ActiveProviderNotConfiguredError,
     ModelRequiredError,
@@ -148,9 +156,7 @@ class NomiRuntime:
     def set_reminder_consumers(self, consumers: list[str] | tuple[str, ...] | set[str]) -> None:
         """设置当前 runtime 已挂载的全局提醒消费入口。"""
         normalized = {
-            str(consumer or "").strip()
-            for consumer in consumers
-            if str(consumer or "").strip()
+            str(consumer or "").strip() for consumer in consumers if str(consumer or "").strip()
         }
         self.state.reminder_consumers = normalized
         self.agent_loop.set_reminder_consumers(normalized)
@@ -257,7 +263,6 @@ class NomiRuntime:
             return ""
         return await provider.transcribe(file_path)
 
-
     def get_dream_log(self, sha: str | None = None) -> DreamLogResult:
         """查看最近一次或指定 Dream 版本差异。
 
@@ -361,6 +366,30 @@ class NomiRuntime:
             )
         )
 
+    async def create_turn(
+        self,
+        session_id: str,
+        content: str,
+        *,
+        client_id: str,
+        metadata: dict | None = None,
+    ) -> dict:
+        """创建一轮远端对话并返回排队状态。"""
+        turn_id = f"turn_{uuid.uuid4().hex[:12]}"
+        payload = dict(metadata or {})
+        payload["_turn_id"] = turn_id
+        await self.send_user_message(
+            session_id,
+            content,
+            client_id=client_id,
+            metadata=payload,
+        )
+        return {
+            "turn_id": turn_id,
+            "session_id": session_id,
+            "status": "queued",
+        }
+
     def list_sessions(
         self,
         *,
@@ -417,6 +446,11 @@ class NomiRuntime:
     ) -> dict:
         """创建一条新的远程会话。"""
         session = self.agent_loop.sessions.create_session(session_id, title=title, source="remote")
+        return self._serialize_session_summary(session)
+
+    def get_session(self, session_id: str) -> dict:
+        """读取一条会话摘要。"""
+        session = self._require_existing_session(session_id)
         return self._serialize_session_summary(session)
 
     def delete_session(self, session_id: str) -> dict:
@@ -640,6 +674,45 @@ class NomiRuntime:
             "mcpServers": self._build_sidebar_mcp_servers(),
         }
 
+    async def get_status_payload(self) -> dict:
+        """返回 remote vNext 状态快照。"""
+        sessions = self.list_sessions(page_size=1).get("sessions") or []
+        session_id = str(sessions[0].get("session_id")) if sessions else "remote:status"
+        if sessions:
+            snapshot = await self.get_status_snapshot(session_id)
+            return {
+                "version": snapshot.version,
+                "model": snapshot.model,
+                "start_time": snapshot.start_time,
+                "last_usage": dict(snapshot.last_usage),
+                "context_window_tokens": snapshot.context_window_tokens,
+                "session_msg_count": snapshot.session_msg_count,
+                "context_tokens_estimate": snapshot.context_tokens_estimate,
+                "search_usage_text": snapshot.search_usage_text,
+            }
+        return {
+            "version": __version__,
+            "model": str(self.state.config.agents.defaults.model or ""),
+            "start_time": time.time(),
+            "last_usage": {},
+            "context_window_tokens": 0,
+            "session_msg_count": 0,
+            "context_tokens_estimate": 0,
+            "search_usage_text": None,
+        }
+
+    async def get_bootstrap_snapshot(self) -> dict:
+        """返回 remote vNext 首屏完整快照。"""
+        sidebar = self.get_sidebar_snapshot()
+        return {
+            "status": await self.get_status_payload(),
+            "sessions": self.list_sessions().get("sessions", []),
+            "provider_catalog": build_provider_catalog(),
+            "provider_state": self.get_provider_state_snapshot(),
+            "tasks": self.list_task_items(),
+            "sidebar": sidebar,
+        }
+
     def create_task_after(
         self,
         session_id: str,
@@ -657,6 +730,48 @@ class NomiRuntime:
             chat_id=chat_id,
         )
         return self._serialize_task(task)
+
+    def create_task_from_schedule(
+        self,
+        *,
+        instruction: str,
+        schedule: CronSchedule,
+        source_session_key: str,
+        target_channels: list[str] | None = None,
+    ) -> dict:
+        """按 remote vNext 调度模型创建任务。"""
+        channel, chat_id = self._split_session_id(source_session_key)
+        task = self.agent_loop.tasks.create_task(
+            instruction=instruction,
+            schedule=schedule,
+            turn=None if schedule.kind in {"cron", "every"} else 1,
+            mode="scheduled",
+            source_session_key=source_session_key,
+            channel=channel,
+            chat_id=chat_id,
+            target_channels=target_channels,
+        )
+        return self._serialize_task(task)
+
+    @staticmethod
+    def schedule_from_remote_payload(payload) -> CronSchedule:
+        """把协议层 TaskSchedule 转为 core CronSchedule。"""
+        return CronSchedule(
+            kind=payload.kind,
+            at_ms=payload.at_ms,
+            every_ms=payload.every_ms,
+            expr=payload.expr,
+            tz=payload.tz,
+        )
+
+    def list_task_items(self) -> list[dict]:
+        """返回 remote vNext 任务列表。"""
+        return [self._serialize_task_item(task) for task in self.agent_loop.tasks.list_tasks(True)]
+
+    def get_task_item(self, task_id: str) -> dict | None:
+        """按 ID 返回 remote vNext 任务。"""
+        task = self.agent_loop.tasks.get_task(task_id)
+        return self._serialize_task_item(task) if task else None
 
     def create_task_at(
         self,
@@ -719,37 +834,37 @@ class NomiRuntime:
     def enable_task(self, task_id: str) -> dict | None:
         """启用一条任务。"""
         task = self.agent_loop.tasks.enable_task(task_id)
-        return self._serialize_task(task) if task else None
+        return self._serialize_task_item(task) if task else None
 
     def disable_task(self, task_id: str) -> dict | None:
         """停用一条任务。"""
         task = self.agent_loop.tasks.disable_task(task_id)
-        return self._serialize_task(task) if task else None
+        return self._serialize_task_item(task) if task else None
 
     def update_task_instruction(self, task_id: str, instruction: str) -> dict | None:
         """更新任务内容。"""
         task = self.agent_loop.tasks.update_instruction(task_id, instruction)
-        return self._serialize_task(task) if task else None
+        return self._serialize_task_item(task) if task else None
 
     def reschedule_task_after(self, task_id: str, *, after_seconds: int) -> dict | None:
         """把任务改成延时执行。"""
         task = self.agent_loop.tasks.reschedule_after(task_id, after_seconds=after_seconds)
-        return self._serialize_task(task) if task else None
+        return self._serialize_task_item(task) if task else None
 
     def reschedule_task_at(self, task_id: str, *, at: str) -> dict | None:
         """把任务改成定点执行。"""
         task = self.agent_loop.tasks.reschedule_at(task_id, at=at)
-        return self._serialize_task(task) if task else None
+        return self._serialize_task_item(task) if task else None
 
     def reschedule_task_daily(self, task_id: str, *, daily_time: str) -> dict | None:
         """把任务改成每日执行。"""
         task = self.agent_loop.tasks.reschedule_daily(task_id, daily_time=daily_time)
-        return self._serialize_task(task) if task else None
+        return self._serialize_task_item(task) if task else None
 
     def reschedule_task_every(self, task_id: str, *, every_seconds: int) -> dict | None:
         """把任务改成固定间隔执行。"""
         task = self.agent_loop.tasks.reschedule_every(task_id, every_seconds=every_seconds)
-        return self._serialize_task(task) if task else None
+        return self._serialize_task_item(task) if task else None
 
     def list_skills(self) -> list[dict]:
         """列出当前已安装的 skills。"""
@@ -996,7 +1111,7 @@ class NomiRuntime:
         """构造远端任务侧栏数据。"""
         items: list[dict] = []
         for task in self.agent_loop.tasks.list_tasks(include_disabled=True):
-            items.append(self._serialize_task(task))
+            items.append(self._serialize_sidebar_task(task))
         return items
 
     def _build_sidebar_skills(self) -> list[dict]:
@@ -1018,6 +1133,30 @@ class NomiRuntime:
         return items
 
     def _serialize_task(self, task) -> dict:
+        """兼容旧调用，把任务对象转换成 remote vNext 任务结构。"""
+        return self._serialize_task_item(task)
+
+    def _serialize_task_item(self, task) -> dict:
+        """把任务对象转换成协议层 TaskItem。"""
+        return {
+            "id": task.id,
+            "title": task.title or task.id,
+            "instruction": task.payload.instruction,
+            "enabled": task.enabled,
+            "schedule": {
+                "kind": task.schedule.kind,
+                "at_ms": task.schedule.at_ms,
+                "every_ms": task.schedule.every_ms,
+                "expr": task.schedule.expr,
+                "tz": task.schedule.tz,
+            },
+            "next_run_at_ms": self.agent_loop.tasks.next_run_for_task(task.id),
+            "run_count": task.run.run_count,
+            "status": task.run.status,
+            "target_channels": list(getattr(task, "target_channels", []) or []),
+        }
+
+    def _serialize_sidebar_task(self, task) -> dict:
         """把任务对象转换成前端侧栏结构。"""
         return {
             "id": task.id,

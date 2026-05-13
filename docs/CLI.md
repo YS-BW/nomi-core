@@ -200,7 +200,7 @@ channel 不再负责启动进程。配置变化通过 `nomi instance restart` �
 
 ## `nomi remote`
 
-`remote` 是桌面壳 WebSocket adapter 的配置入口。
+`remote` 是桌面壳 HTTP API + SSE adapter 的配置入口。
 
 当前子命令：
 
