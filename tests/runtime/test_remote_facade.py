@@ -64,6 +64,17 @@ class _ReloadLoopStub:
         self.reminder_consumer = next(iter(sorted(self.reminder_consumers)), None)
 
 
+class _QuickActionLoopStub(_LoopStub):
+    """测试 runtime 初始化时绑定的快捷动作 handler。"""
+
+    def __init__(self, workspace: Path) -> None:
+        """初始化测试用 AgentLoop stub。"""
+        super().__init__(workspace)
+        self.tasks = SimpleNamespace(enqueue_global_reminder=lambda **_kwargs: True)
+        self.tools = SimpleNamespace(register=lambda _tool: None)
+        self.instance_relation_quick_action_handler = None
+
+
 class _InstanceClientStub:
     """测试用 instance channel client。"""
 
@@ -71,17 +82,30 @@ class _InstanceClientStub:
         """初始化调用记录。"""
         self.requests: list[tuple[object, dict]] = []
         self.responses: list[tuple[object, dict]] = []
+        self.removes: list[tuple[object, dict]] = []
         self.messages: list[tuple[object, dict]] = []
         self.message_result: dict = {"ok": True, "content": "remote pong"}
 
-    async def send_relation_request(self, relation, payload: dict) -> dict:
+    async def send_relation_request(
+        self,
+        *,
+        url: str,
+        invite_id: str,
+        secret: str,
+        payload: dict,
+    ) -> dict:
         """记录关系申请。"""
-        self.requests.append((relation, payload))
+        self.requests.append(({"url": url, "invite_id": invite_id, "secret": secret}, payload))
         return {"ok": True}
 
-    async def send_relation_response(self, relation, payload: dict) -> dict:
+    async def send_relation_response(self, request, payload: dict) -> dict:
         """记录关系响应。"""
-        self.responses.append((relation, payload))
+        self.responses.append((request, payload))
+        return {"ok": True}
+
+    async def send_relation_remove(self, relation, payload: dict) -> dict:
+        """记录关系删除通知。"""
+        self.removes.append((relation, payload))
         return {"ok": True}
 
     async def send_message(self, relation, payload: dict) -> dict:
@@ -101,6 +125,55 @@ class _NotificationStub:
         """记录一次全局通知。"""
         self.calls.append(kwargs)
         return True
+
+
+def _create_incoming_request(
+    runtime: NomiRuntime,
+    key: str = "xmy",
+    *,
+    url: str = "http://127.0.0.1:8766",
+    requested_permission: str = "chat",
+    response_token: str = "response-token",
+    invite_id: str = "inv-1",
+):
+    """创建测试用 incoming pending 申请。"""
+    return runtime.instance_relations.create_incoming_request(
+        key=key,
+        url=url,
+        requested_permission=requested_permission,
+        response_token=response_token,
+        invite_id=invite_id,
+    )
+
+
+def _create_outgoing_request(
+    runtime: NomiRuntime,
+    key: str = "xmy",
+    *,
+    url: str = "http://127.0.0.1:8766",
+    requested_permission: str = "chat",
+    response_token: str = "response-token",
+    invite_id: str = "inv-1",
+):
+    """创建测试用 outgoing pending 申请。"""
+    return runtime.instance_relations.create_outgoing_request(
+        key=key,
+        url=url,
+        requested_permission=requested_permission,
+        response_token=response_token,
+        invite_id=invite_id,
+    )
+
+
+def _create_relation(
+    runtime: NomiRuntime,
+    key: str = "xmy",
+    *,
+    url: str = "http://127.0.0.1:8766",
+    permission: str = "chat",
+):
+    """创建测试用已接受关系。"""
+    return runtime.instance_relations.create_relation(key=key, url=url, permission=permission)
 
 
 @pytest.mark.asyncio
@@ -204,14 +277,13 @@ async def test_runtime_receive_instance_message_uses_instance_identity(tmp_path:
         provider_builder=lambda _config: object(),
         agent_loop_factory=lambda **_kwargs: loop_stub,
     )
-    runtime.instance_relations.upsert_pending(
-        key="xmy",
-        url="http://127.0.0.1:8766",
-        token="token",
-    )
-    runtime.instance_relations.accept("xmy", "chat")
+    relation = _create_relation(runtime)
 
-    result = await runtime.receive_instance_message({"from_key": "xmy", "content": "ping"})
+    result = await runtime.receive_instance_message(
+        {"from_key": "xmy", "content": "ping"},
+        relation_id=relation.relation_id,
+        relation_token=relation.relation_token,
+    )
 
     assert result["content"] == "pong"
     loop_stub.process_direct_result.assert_awaited_once_with(
@@ -238,6 +310,111 @@ async def test_runtime_receive_instance_message_uses_instance_identity(tmp_path:
 
 
 @pytest.mark.asyncio
+async def test_runtime_instance_relation_quick_action_accepts_single_pending_trust(
+    tmp_path: Path,
+) -> None:
+    """用户只回复“信任”时，唯一 pending 关系应被接受为 all 权限。"""
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    config.remote.host = "127.0.0.1"
+    config.remote.port = 8765
+    config.remote.auth_token = "token-default"
+    loop_stub = _QuickActionLoopStub(config.workspace_path)
+    runtime = NomiRuntime.from_config(
+        config,
+        provider_builder=lambda _config: object(),
+        agent_loop_factory=lambda **_kwargs: loop_stub,
+    )
+    client = _InstanceClientStub()
+    runtime.instance_relations.client = client
+    _create_incoming_request(runtime, requested_permission="task")
+
+    result = await runtime.handle_instance_relation_quick_action("信任")
+
+    assert result == "已信任 xmy，权限：all。"
+    relation = runtime.instance_relations.get_relation("xmy")
+    assert relation is not None
+    assert relation.permission == "all"
+    assert client.responses[0][1]["status"] == "accepted"
+    assert client.responses[0][1]["permission"] == "all"
+    assert client.responses[0][1]["relation_id"] == relation.relation_id
+    assert runtime.instance_relations.get_request("xmy") is None
+
+
+@pytest.mark.asyncio
+async def test_runtime_instance_relation_quick_action_rejects_single_pending(
+    tmp_path: Path,
+) -> None:
+    """用户只回复“拒绝”时，唯一 pending 关系应被拒绝并删除。"""
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    loop_stub = _QuickActionLoopStub(config.workspace_path)
+    runtime = NomiRuntime.from_config(
+        config,
+        provider_builder=lambda _config: object(),
+        agent_loop_factory=lambda **_kwargs: loop_stub,
+    )
+    client = _InstanceClientStub()
+    runtime.instance_relations.client = client
+    _create_incoming_request(runtime)
+
+    result = await runtime.handle_instance_relation_quick_action("拒绝")
+
+    assert result == "已拒绝 xmy。"
+    assert runtime.instance_relations.get_relation("xmy") is None
+    assert runtime.instance_relations.get_request("xmy") is None
+    assert client.responses[0][1]["status"] == "rejected"
+
+
+@pytest.mark.asyncio
+async def test_runtime_instance_relation_quick_action_requires_key_for_multiple_pending(
+    tmp_path: Path,
+) -> None:
+    """多个 pending 关系存在时，短回复不能猜测目标。"""
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    loop_stub = _QuickActionLoopStub(config.workspace_path)
+    runtime = NomiRuntime.from_config(
+        config,
+        provider_builder=lambda _config: object(),
+        agent_loop_factory=lambda **_kwargs: loop_stub,
+    )
+    _create_incoming_request(runtime, key="xmy")
+    _create_incoming_request(runtime, key="bomi", url="http://127.0.0.1:8767")
+
+    result = await runtime.handle_instance_relation_quick_action("同意")
+
+    assert result is not None
+    assert "多个待确认" in result
+    assert runtime.instance_relations.get_request("xmy") is not None
+    assert runtime.instance_relations.get_request("bomi") is not None
+
+
+@pytest.mark.asyncio
+async def test_runtime_instance_relation_quick_action_accepts_named_pending(
+    tmp_path: Path,
+) -> None:
+    """带 key 的确认语句应命中指定 pending 关系。"""
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    loop_stub = _QuickActionLoopStub(config.workspace_path)
+    runtime = NomiRuntime.from_config(
+        config,
+        provider_builder=lambda _config: object(),
+        agent_loop_factory=lambda **_kwargs: loop_stub,
+    )
+    runtime.instance_relations.client = _InstanceClientStub()
+    _create_incoming_request(runtime, key="xmy")
+    _create_incoming_request(runtime, key="bomi", url="http://127.0.0.1:8767")
+
+    result = await runtime.handle_instance_relation_quick_action("同意添加 xmy")
+
+    assert result == "已接受 xmy，权限：chat。"
+    assert runtime.instance_relations.get_relation("xmy") is not None
+    assert runtime.instance_relations.get_request("bomi") is not None
+
+
+@pytest.mark.asyncio
 async def test_runtime_send_instance_message_records_sender_session(tmp_path: Path) -> None:
     """发送 instance 消息时发送方也应写入唯一 instance 会话。"""
     config = Config()
@@ -251,18 +428,14 @@ async def test_runtime_send_instance_message_records_sender_session(tmp_path: Pa
     )
     client = _InstanceClientStub()
     runtime.instance_relations.client = client
-    runtime.instance_relations.upsert_pending(
-        key="xmy",
-        url="http://127.0.0.1:8766",
-        token="token",
-    )
-    runtime.instance_relations.accept("xmy", "chat")
+    _create_relation(runtime)
 
     result = await runtime.send_instance_message("xmy", "ping")
 
     assert result["content"] == "remote pong"
     assert result["session_id"] == "instance:xmy"
-    assert client.messages[0][1]["from_token"] == "local-token"
+    assert client.messages[0][1]["from_key"] == "default"
+    assert "from_token" not in client.messages[0][1]
     session = runtime.agent_loop.sessions.get("instance:xmy")
     assert session is not None
     assert [item["content"] for item in session.messages] == ["ping", "remote pong"]
@@ -290,12 +463,7 @@ async def test_runtime_send_instance_message_records_error(tmp_path: Path) -> No
             raise RuntimeError("boom")
 
     runtime.instance_relations.client = FailingClient()
-    runtime.instance_relations.upsert_pending(
-        key="xmy",
-        url="http://127.0.0.1:8766",
-        token="token",
-    )
-    runtime.instance_relations.accept("xmy", "chat")
+    _create_relation(runtime)
 
     with pytest.raises(RuntimeError, match="boom"):
         await runtime.send_instance_message("xmy", "ping")
@@ -307,10 +475,10 @@ async def test_runtime_send_instance_message_records_error(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
-async def test_runtime_receive_instance_message_matches_endpoint_when_key_differs(
+async def test_runtime_receive_instance_message_rejects_wrong_relation_token(
     tmp_path: Path,
 ) -> None:
-    """收消息时 from_key 不一致也应能通过 endpoint 命中本地关系。"""
+    """收消息时必须使用 relation token，remote token 不再可用。"""
     config = Config()
     config.agents.defaults.workspace = str(tmp_path)
     loop_stub = _LoopStub(config.workspace_path)
@@ -319,26 +487,16 @@ async def test_runtime_receive_instance_message_matches_endpoint_when_key_differ
         provider_builder=lambda _config: object(),
         agent_loop_factory=lambda **_kwargs: loop_stub,
     )
-    runtime.instance_relations.upsert_pending(
-        key="alias",
-        url="http://127.0.0.1:8766",
-        token="token-x",
-    )
-    runtime.instance_relations.accept("alias", "chat")
+    relation = _create_relation(runtime, key="alias")
 
-    result = await runtime.receive_instance_message(
-        {
-            "from_key": "remote-name",
-            "from_url": "http://127.0.0.1:8766",
-            "from_token": "token-x",
-            "content": "ping",
-        }
-    )
+    with pytest.raises(PermissionError):
+        await runtime.receive_instance_message(
+            {"from_key": "remote-name", "content": "ping"},
+            relation_id=relation.relation_id,
+            relation_token="wrong-token",
+        )
 
-    assert result["session_id"] == "instance:alias"
-    loop_stub.process_direct_result.assert_awaited_once()
-    assert loop_stub.process_direct_result.await_args.kwargs["session_key"] == "instance:alias"
-    assert runtime.agent_loop.sessions.get("instance:alias") is not None
+    loop_stub.process_direct_result.assert_not_awaited()
 
 
 def test_runtime_instance_session_queries_format_messages(tmp_path: Path) -> None:
@@ -351,13 +509,8 @@ def test_runtime_instance_session_queries_format_messages(tmp_path: Path) -> Non
         provider_builder=lambda _config: object(),
         agent_loop_factory=lambda **_kwargs: loop_stub,
     )
-    runtime.instance_relations.upsert_pending(
-        key="xmy",
-        url="http://127.0.0.1:8766",
-        token="token",
-        name="小美",
-    )
-    runtime.instance_relations.accept("xmy", "chat")
+    _create_relation(runtime)
+    runtime.rename_instance_relation("xmy", "小美")
     runtime._append_instance_session_message(
         "xmy",
         role="user",
@@ -378,7 +531,7 @@ def test_runtime_instance_session_queries_format_messages(tmp_path: Path) -> Non
 async def test_runtime_invite_code_keeps_local_key_and_uses_remote_name_as_note(
     tmp_path: Path,
 ) -> None:
-    """使用邀请码发起申请时应保留本地 key，并把对方实例名作为备注。"""
+    """使用邀请码发起申请时应读取对方 key 并写入 outgoing request。"""
     config = Config()
     config.agents.defaults.workspace = str(tmp_path)
     config.remote.auth_token = "local-token"
@@ -391,25 +544,27 @@ async def test_runtime_invite_code_keeps_local_key_and_uses_remote_name_as_note(
     client = _InstanceClientStub()
     runtime.instance_relations.client = client
     code = (
-        "nomi://instance-invite?name=xmy&url=http%3A%2F%2F127.0.0.1%3A8766&token=token-x"
+        "nomi://instance-invite?v=1&key=xmy&url=http%3A%2F%2F127.0.0.1%3A8766"
+        "&invite_id=inv-1&secret=secret-1"
     )
 
-    await runtime.invite_instance("custom-alias", invite_code=code)
+    await runtime.invite_instance(invite_code=code, requested_permission="task")
 
-    relation = runtime.instance_relations.get_relation("custom-alias")
-    assert relation is not None
-    assert relation.name == "xmy"
-    assert relation.url == "http://127.0.0.1:8766"
-    assert relation.token == "token-x"
-    assert runtime.instance_relations.get_relation("xmy") is None
-    assert client.requests[0][0].key == "custom-alias"
+    request = runtime.instance_relations.get_request("xmy")
+    assert request is not None
+    assert request.direction == "outgoing"
+    assert request.requested_permission == "task"
+    assert client.requests[0][0]["invite_id"] == "inv-1"
+    assert client.requests[0][0]["secret"] == "secret-1"
+    assert client.requests[0][1]["from_key"] == "default"
+    assert client.requests[0][1]["requested_permission"] == "task"
 
 
 @pytest.mark.asyncio
-async def test_runtime_relation_response_matches_existing_endpoint_when_key_differs(
+async def test_runtime_relation_response_accepts_outgoing_request_with_response_token(
     tmp_path: Path,
 ) -> None:
-    """对方回调 key 不一致时应优先按 endpoint 命中已有关系，避免重复建表项。"""
+    """申请方收到 accepted 后应校验 response token 并写入 relation。"""
     config = Config()
     config.agents.defaults.workspace = str(tmp_path)
     loop_stub = _LoopStub(config.workspace_path)
@@ -418,31 +573,32 @@ async def test_runtime_relation_response_matches_existing_endpoint_when_key_diff
         provider_builder=lambda _config: object(),
         agent_loop_factory=lambda **_kwargs: loop_stub,
     )
-    runtime.instance_relations.upsert_pending(
-        key="alias",
-        url="http://127.0.0.1:8766",
-        token="token-x",
-    )
+    _create_outgoing_request(runtime, key="xmy", response_token="response-token")
 
     await runtime.receive_instance_relation_response(
         {
             "from_key": "xmy",
             "from_url": "http://127.0.0.1:8766",
-            "from_token": "token-x",
-            "status": "friend",
-            "permission": "chat",
-        }
+            "status": "accepted",
+            "relation_id": "rel-1",
+            "relation_token": "relation-token",
+        },
+        response_token="response-token",
     )
 
-    relation = runtime.instance_relations.get_relation("alias")
+    relation = runtime.instance_relations.get_relation("xmy")
     assert relation is not None
-    assert relation.status == "friend"
-    assert runtime.instance_relations.get_relation("xmy") is None
+    assert relation.relation_id == "rel-1"
+    assert relation.relation_token == "relation-token"
+    assert relation.permission == "chat"
+    assert runtime.instance_relations.get_request("xmy") is None
 
 
 @pytest.mark.asyncio
-async def test_runtime_existing_friend_request_does_not_notify_again(tmp_path: Path) -> None:
-    """已是好友的重复申请不应再次触发确认通知。"""
+async def test_runtime_relation_remove_deletes_local_relation_and_notifies_peer(
+    tmp_path: Path,
+) -> None:
+    """删除关系应物理删除本地 relation 并尽力通知对方。"""
     config = Config()
     config.agents.defaults.workspace = str(tmp_path)
     loop_stub = _LoopStub(config.workspace_path)
@@ -451,25 +607,15 @@ async def test_runtime_existing_friend_request_does_not_notify_again(tmp_path: P
         provider_builder=lambda _config: object(),
         agent_loop_factory=lambda **_kwargs: loop_stub,
     )
-    notification = _NotificationStub()
-    runtime.instance_relations.notification = notification
-    runtime.instance_relations.upsert_pending(
-        key="xmy",
-        url="http://127.0.0.1:8766",
-        token="token-x",
-    )
-    runtime.instance_relations.accept("xmy", "chat")
+    client = _InstanceClientStub()
+    runtime.instance_relations.client = client
+    _create_relation(runtime)
 
-    await runtime.receive_instance_relation_request(
-        {
-            "from_key": "xmy",
-            "from_url": "http://127.0.0.1:8766",
-            "from_token": "token-x",
-        }
-    )
+    removed = await runtime.remove_instance_relation("xmy")
 
-    assert notification.calls == []
-    assert runtime.instance_relations.get_relation("xmy").status == "friend"
+    assert removed["removed"] is True
+    assert runtime.instance_relations.get_relation("xmy") is None
+    assert client.removes[0][1]["status"] == "removed"
 
 
 def test_runtime_missing_session_raises_session_not_found(tmp_path: Path) -> None:

@@ -86,6 +86,16 @@ def get_instance_relations_path() -> Path:
     return get_data_dir() / "instance-relations.json"
 
 
+def get_instance_requests_path() -> Path:
+    """返回实例关系申请存储文件路径。"""
+    return get_data_dir() / "instance-requests.json"
+
+
+def get_instance_invite_path() -> Path:
+    """返回当前有效实例邀请码存储文件路径。"""
+    return get_data_dir() / "instance-invite.json"
+
+
 def get_skill_usage_log_path() -> Path:
     """返回 skill 使用日志文件路径。"""
     return get_logs_dir() / "skill_usage.jsonl"

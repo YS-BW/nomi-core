@@ -119,3 +119,27 @@ async def test_process_message_fast_apply_shortcuts_normal_flow(tmp_path: Path) 
     assert result.stop_reason == "user_profile_quick_action"
     assert "已更新 USER.md" in result.final_content
     processor.run_agent_loop.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_process_message_instance_relation_short_trust_bypasses_model(tmp_path: Path) -> None:
+    """唯一 pending 关系存在时，“信任”应直接接受而不是交给模型猜工具。"""
+    loop = _mk_loop(tmp_path)
+    processor = TurnProcessor(loop)
+    msg = InboundMessage(channel="weixin", sender_id="u1", chat_id="chat", content="信任")
+    calls = []
+
+    async def _handle(text: str):
+        calls.append(text)
+        return "已信任 xmy，权限：all。"
+
+    loop.user_profile.detect_quick_action = MagicMock(return_value=None)
+    loop.instance_relation_quick_action_handler = _handle
+    processor.run_agent_loop = AsyncMock()
+
+    result = await processor.process_message_result(msg)
+
+    assert result.stop_reason == "instance_relation_quick_action"
+    assert result.final_content == "已信任 xmy，权限：all。"
+    assert calls == ["信任"]
+    processor.run_agent_loop.assert_not_called()

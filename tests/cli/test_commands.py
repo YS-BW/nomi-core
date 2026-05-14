@@ -263,7 +263,10 @@ def mock_agent_runtime(tmp_path):
     config.agents.defaults.workspace = str(tmp_path / "default-workspace")
 
     with (
-        patch("nomi.cli.commands.agent.load_runtime_config", return_value=config) as mock_load_runtime_config,
+        patch(
+            "nomi.cli.commands.agent.load_runtime_config",
+            return_value=config,
+        ) as mock_load_runtime_config,
         patch("nomi.cli.commands.agent.sync_workspace_templates") as mock_sync_templates,
         patch("nomi.cli.commands.agent.make_runtime") as mock_make_runtime,
         patch("nomi.cli.commands.agent.print_agent_response") as mock_print_response,
@@ -332,15 +335,23 @@ def test_agent_warns_when_default_config_file_is_missing(monkeypatch, tmp_path: 
     monkeypatch.setattr("nomi.cli.support.config.get_config_path", lambda: missing_config)
     monkeypatch.setattr("nomi.cli.support.config.load_config", lambda _path=None: config)
     monkeypatch.setattr("nomi.cli.support.config.resolve_config_env_vars", lambda loaded: loaded)
-    monkeypatch.setattr("nomi.cli.commands.agent.sync_workspace_templates", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "nomi.cli.commands.agent.sync_workspace_templates",
+        lambda *_args, **_kwargs: None,
+    )
     runtime = MagicMock()
-    runtime.run_once = AsyncMock(return_value=OutboundMessage(channel="cli", chat_id="direct", content="ok"))
+    runtime.run_once = AsyncMock(
+        return_value=OutboundMessage(channel="cli", chat_id="direct", content="ok")
+    )
     runtime.close = AsyncMock(return_value=None)
     monkeypatch.setattr(
         "nomi.cli.commands.agent.make_runtime",
         lambda _config, reminder_consumer=None: runtime,
     )
-    monkeypatch.setattr("nomi.cli.commands.agent.print_agent_response", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "nomi.cli.commands.agent.print_agent_response",
+        lambda *_args, **_kwargs: None,
+    )
 
     result = runner.invoke(app, ["agent", "-m", "hello"])
 
@@ -374,18 +385,26 @@ def test_agent_config_sets_active_path(monkeypatch, tmp_path: Path) -> None:
     config = Config()
     seen: dict[str, Path] = {}
 
-    monkeypatch.setattr("nomi.cli.support.config.set_config_path", lambda path: seen.__setitem__("config_path", path))
+    monkeypatch.setattr(
+        "nomi.cli.support.config.set_config_path",
+        lambda path: seen.__setitem__("config_path", path),
+    )
     monkeypatch.setattr("nomi.cli.support.config.load_config", lambda _path=None: config)
     monkeypatch.setattr("nomi.cli.support.config.resolve_config_env_vars", lambda loaded: loaded)
     monkeypatch.setattr("nomi.cli.commands.agent.sync_workspace_templates", lambda _path: None)
     monkeypatch.setattr(
         "nomi.cli.commands.agent.make_runtime",
         lambda _config, reminder_consumer=None: MagicMock(
-            run_once=AsyncMock(return_value=OutboundMessage(channel="cli", chat_id="direct", content="ok")),
+            run_once=AsyncMock(
+                return_value=OutboundMessage(channel="cli", chat_id="direct", content="ok")
+            ),
             close=AsyncMock(return_value=None),
         ),
     )
-    monkeypatch.setattr("nomi.cli.commands.agent.print_agent_response", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "nomi.cli.commands.agent.print_agent_response",
+        lambda *_args, **_kwargs: None,
+    )
 
     result = runner.invoke(app, ["agent", "-m", "hello", "-c", str(config_file)])
 
@@ -522,7 +541,10 @@ def test_channel_login_invokes_weixin_login(monkeypatch) -> None:
 
     config = Config()
     config.channel.kind = "weixin"
-    monkeypatch.setattr("nomi.cli.commands.channel.load_runtime_config", lambda *_args, **_kwargs: config)
+    monkeypatch.setattr(
+        "nomi.cli.commands.channel.load_runtime_config",
+        lambda *_args, **_kwargs: config,
+    )
     monkeypatch.setattr(
         "nomi.cli.commands.channel.login_active_channel",
         lambda loaded, *, force: called.update({"config": loaded, "force": force}) or True,
@@ -541,7 +563,10 @@ def test_channel_login_without_force_still_invokes_login(monkeypatch) -> None:
 
     config = Config()
     config.channel.kind = "weixin"
-    monkeypatch.setattr("nomi.cli.commands.channel.load_runtime_config", lambda *_args, **_kwargs: config)
+    monkeypatch.setattr(
+        "nomi.cli.commands.channel.load_runtime_config",
+        lambda *_args, **_kwargs: config,
+    )
     monkeypatch.setattr(
         "nomi.cli.commands.channel.login_active_channel",
         lambda loaded, *, force: called.update({"config": loaded, "force": force}) or True,
@@ -593,7 +618,10 @@ def test_instance_invite_code_prints_runtime_code(monkeypatch) -> None:
     runtime = MagicMock()
     runtime.build_instance_invite_code.return_value = "nomi://instance-invite?token=t"
 
-    monkeypatch.setattr("nomi.cli.commands.instance.load_runtime_config", lambda *_args, **_kwargs: config)
+    monkeypatch.setattr(
+        "nomi.cli.commands.instance.load_runtime_config",
+        lambda *_args, **_kwargs: config,
+    )
     monkeypatch.setattr("nomi.cli.commands.instance.make_runtime", lambda loaded: runtime)
 
     result = runner.invoke(app, ["instance", "invite-code", "--url", "http://example.test"])
@@ -601,6 +629,53 @@ def test_instance_invite_code_prints_runtime_code(monkeypatch) -> None:
     assert result.exit_code == 0
     assert "nomi://instance-invite?token=t" in _strip_ansi(result.stdout)
     runtime.build_instance_invite_code.assert_called_once_with("http://example.test")
+
+
+def test_instance_key_reads_and_updates_config(monkeypatch) -> None:
+    """instance key 应支持读取和字段级保存当前实例 key。"""
+    config = Config()
+    config.instance.key = "default"
+    saved: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "nomi.cli.commands.instance.load_runtime_config",
+        lambda *_args, **_kwargs: config,
+    )
+    monkeypatch.setattr(
+        "nomi.cli.commands.instance.save_config",
+        lambda saved_config, path: saved.update({"config": saved_config, "path": path}),
+    )
+    monkeypatch.setattr(
+        "nomi.cli.commands.instance.get_config_path",
+        lambda: Path("/tmp/config.json"),
+    )
+
+    read_result = runner.invoke(app, ["instance", "key"])
+    write_result = runner.invoke(app, ["instance", "key", "小美"])
+
+    assert read_result.exit_code == 0
+    assert "default" in _strip_ansi(read_result.stdout)
+    assert write_result.exit_code == 0
+    assert config.instance.key == "小美"
+    assert saved["config"] is config
+    assert saved["path"] == Path("/tmp/config.json")
+
+
+def test_instance_key_rejects_path_separator(monkeypatch) -> None:
+    """instance key 应复用 schema 校验拒绝路径分隔符。"""
+    config = Config()
+    saved = MagicMock()
+
+    monkeypatch.setattr(
+        "nomi.cli.commands.instance.load_runtime_config",
+        lambda *_args, **_kwargs: config,
+    )
+    monkeypatch.setattr("nomi.cli.commands.instance.save_config", saved)
+
+    result = runner.invoke(app, ["instance", "key", "bad/key"])
+
+    assert result.exit_code != 0
+    saved.assert_not_called()
 
 
 def test_instance_relations_prints_table(monkeypatch) -> None:
@@ -617,7 +692,10 @@ def test_instance_relations_prints_table(monkeypatch) -> None:
         }
     ]
 
-    monkeypatch.setattr("nomi.cli.commands.instance.load_runtime_config", lambda *_args, **_kwargs: config)
+    monkeypatch.setattr(
+        "nomi.cli.commands.instance.load_runtime_config",
+        lambda *_args, **_kwargs: config,
+    )
     monkeypatch.setattr("nomi.cli.commands.instance.make_runtime", lambda loaded: runtime)
 
     result = runner.invoke(app, ["instance", "relations"])
@@ -633,22 +711,24 @@ def test_instance_invite_from_code_calls_runtime(monkeypatch) -> None:
     """instance invite --from-code 应解析邀请码并发起申请。"""
     config = Config()
     runtime = MagicMock()
-    runtime.invite_instance = AsyncMock(return_value={"ok": True})
+    runtime.invite_instance = AsyncMock(return_value={"ok": True, "key": "xmy"})
     code = (
-        "nomi://instance-invite?name=default&url=http%3A%2F%2F127.0.0.1%3A8766&token=t"
+        "nomi://instance-invite?v=1&key=xmy&url=http%3A%2F%2F127.0.0.1%3A8766"
+        "&invite_id=inv-1&secret=s"
     )
 
-    monkeypatch.setattr("nomi.cli.commands.instance.load_runtime_config", lambda *_args, **_kwargs: config)
+    monkeypatch.setattr(
+        "nomi.cli.commands.instance.load_runtime_config",
+        lambda *_args, **_kwargs: config,
+    )
     monkeypatch.setattr("nomi.cli.commands.instance.make_runtime", lambda loaded: runtime)
 
-    result = runner.invoke(app, ["instance", "invite", "xmy", "--from-code", code])
+    result = runner.invoke(app, ["instance", "invite", "--from-code", code, "--permission", "task"])
 
     assert result.exit_code == 0
     runtime.invite_instance.assert_awaited_once_with(
-        "xmy",
-        url=None,
-        token=None,
         invite_code=code,
+        requested_permission="task",
     )
 
 
@@ -656,26 +736,39 @@ def test_instance_accept_reject_rename_send_call_runtime(monkeypatch) -> None:
     """instance 关系操作命令应调用 runtime。"""
     config = Config()
     runtime = MagicMock()
-    runtime.accept_instance_relation = AsyncMock(return_value={"key": "xmy", "permission": "chat"})
+    runtime.accept_instance_relation = AsyncMock(
+        return_value={"key": "xmy", "permission": "chat"}
+    )
     runtime.reject_instance_relation_async = AsyncMock(return_value=True)
     runtime.rename_instance_relation.return_value = {"key": "xmy", "name": "小美"}
+    runtime.remove_instance_relation = AsyncMock(return_value={"key": "xmy", "removed": True})
+    runtime.set_instance_relation_permission.return_value = {"key": "xmy", "permission": "all"}
     runtime.send_instance_message = AsyncMock(return_value={"content": "pong"})
 
-    monkeypatch.setattr("nomi.cli.commands.instance.load_runtime_config", lambda *_args, **_kwargs: config)
+    monkeypatch.setattr(
+        "nomi.cli.commands.instance.load_runtime_config",
+        lambda *_args, **_kwargs: config,
+    )
     monkeypatch.setattr("nomi.cli.commands.instance.make_runtime", lambda loaded: runtime)
 
     accepted = runner.invoke(app, ["instance", "accept", "xmy", "--permission", "chat"])
     rejected = runner.invoke(app, ["instance", "reject", "xmy"])
     renamed = runner.invoke(app, ["instance", "rename", "xmy", "小美"])
+    removed = runner.invoke(app, ["instance", "remove-relation", "xmy"])
+    permission = runner.invoke(app, ["instance", "permission", "xmy", "all"])
     sent = runner.invoke(app, ["instance", "send", "xmy", "ping"])
 
     assert accepted.exit_code == 0
     assert rejected.exit_code == 0
     assert renamed.exit_code == 0
+    assert removed.exit_code == 0
+    assert permission.exit_code == 0
     assert sent.exit_code == 0
     runtime.accept_instance_relation.assert_awaited_once_with("xmy", "chat")
     runtime.reject_instance_relation_async.assert_awaited_once_with("xmy")
     runtime.rename_instance_relation.assert_called_once_with("xmy", "小美")
+    runtime.remove_instance_relation.assert_awaited_once_with("xmy")
+    runtime.set_instance_relation_permission.assert_called_once_with("xmy", "all")
     runtime.send_instance_message.assert_awaited_once_with("xmy", "ping")
     assert "pong" in _strip_ansi(sent.stdout)
 
@@ -685,12 +778,18 @@ def test_channel_enable_updates_config(monkeypatch) -> None:
     config = Config()
     saved: dict[str, object] = {}
 
-    monkeypatch.setattr("nomi.cli.commands.channel.load_runtime_config", lambda *_args, **_kwargs: config)
+    monkeypatch.setattr(
+        "nomi.cli.commands.channel.load_runtime_config",
+        lambda *_args, **_kwargs: config,
+    )
     monkeypatch.setattr(
         "nomi.cli.commands.channel.save_config",
         lambda saved_config, path: saved.update({"config": saved_config, "path": path}),
     )
-    monkeypatch.setattr("nomi.cli.commands.channel.get_config_path", lambda: Path("/tmp/config.json"))
+    monkeypatch.setattr(
+        "nomi.cli.commands.channel.get_config_path",
+        lambda: Path("/tmp/config.json"),
+    )
 
     result = runner.invoke(app, ["channel", "enable", "weixin"])
 
@@ -706,12 +805,18 @@ def test_channel_disable_updates_config(monkeypatch) -> None:
     config.channel.kind = "weixin"
     saved: dict[str, object] = {}
 
-    monkeypatch.setattr("nomi.cli.commands.channel.load_runtime_config", lambda *_args, **_kwargs: config)
+    monkeypatch.setattr(
+        "nomi.cli.commands.channel.load_runtime_config",
+        lambda *_args, **_kwargs: config,
+    )
     monkeypatch.setattr(
         "nomi.cli.commands.channel.save_config",
         lambda saved_config, path: saved.update({"config": saved_config, "path": path}),
     )
-    monkeypatch.setattr("nomi.cli.commands.channel.get_config_path", lambda: Path("/tmp/config.json"))
+    monkeypatch.setattr(
+        "nomi.cli.commands.channel.get_config_path",
+        lambda: Path("/tmp/config.json"),
+    )
 
     result = runner.invoke(app, ["channel", "disable"])
 
@@ -723,7 +828,10 @@ def test_channel_disable_updates_config(monkeypatch) -> None:
 
 def test_channel_login_requires_enabled_channel(monkeypatch) -> None:
     """channel login 在未启用 channel 时提示先启用。"""
-    monkeypatch.setattr("nomi.cli.commands.channel.load_runtime_config", lambda *_args, **_kwargs: Config())
+    monkeypatch.setattr(
+        "nomi.cli.commands.channel.load_runtime_config",
+        lambda *_args, **_kwargs: Config(),
+    )
 
     result = runner.invoke(app, ["channel", "login"])
 
@@ -737,8 +845,14 @@ def test_instance_start_spawns_runtime_service(monkeypatch, tmp_path: Path) -> N
     config = Config()
     captured: dict[str, object] = {}
 
-    monkeypatch.setattr("nomi.cli.commands.instance.load_runtime_config", lambda *_args, **_kwargs: config)
-    monkeypatch.setattr("nomi.cli.commands.instance.sync_workspace_templates", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "nomi.cli.commands.instance.load_runtime_config",
+        lambda *_args, **_kwargs: config,
+    )
+    monkeypatch.setattr(
+        "nomi.cli.commands.instance.sync_workspace_templates",
+        lambda *_args, **_kwargs: None,
+    )
     monkeypatch.setattr(
         "nomi.cli.commands.instance.start_background_service",
         lambda config_arg, workspace, loaded, **kwargs: captured.update(
@@ -759,8 +873,14 @@ def test_instance_restart_spawns_runtime_service(monkeypatch) -> None:
     config = Config()
     captured: dict[str, object] = {}
 
-    monkeypatch.setattr("nomi.cli.commands.instance.load_runtime_config", lambda *_args, **_kwargs: config)
-    monkeypatch.setattr("nomi.cli.commands.instance.sync_workspace_templates", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "nomi.cli.commands.instance.load_runtime_config",
+        lambda *_args, **_kwargs: config,
+    )
+    monkeypatch.setattr(
+        "nomi.cli.commands.instance.sync_workspace_templates",
+        lambda *_args, **_kwargs: None,
+    )
     monkeypatch.setattr(
         "nomi.cli.commands.instance.restart_background_service",
         lambda config_arg, workspace, loaded, **kwargs: captured.update(
@@ -780,7 +900,10 @@ def test_instance_stop_stops_runtime_service(monkeypatch) -> None:
     config = Config()
     called: dict[str, object] = {}
 
-    monkeypatch.setattr("nomi.cli.commands.instance.load_runtime_config", lambda *_args, **_kwargs: config)
+    monkeypatch.setattr(
+        "nomi.cli.commands.instance.load_runtime_config",
+        lambda *_args, **_kwargs: config,
+    )
     monkeypatch.setattr(
         "nomi.cli.commands.instance.stop_background_service",
         lambda loaded: called.update({"loaded": loaded}),
@@ -797,12 +920,18 @@ def test_remote_enable_updates_config_and_generates_token(monkeypatch) -> None:
     config = Config()
     saved: dict[str, object] = {}
 
-    monkeypatch.setattr("nomi.cli.commands.remote.load_runtime_config", lambda *_args, **_kwargs: config)
+    monkeypatch.setattr(
+        "nomi.cli.commands.remote.load_runtime_config",
+        lambda *_args, **_kwargs: config,
+    )
     monkeypatch.setattr(
         "nomi.cli.commands.remote.save_config",
         lambda saved_config, path: saved.update({"config": saved_config, "path": path}),
     )
-    monkeypatch.setattr("nomi.cli.commands.remote.get_config_path", lambda: Path("/tmp/config.json"))
+    monkeypatch.setattr(
+        "nomi.cli.commands.remote.get_config_path",
+        lambda: Path("/tmp/config.json"),
+    )
     monkeypatch.setattr("nomi.cli.commands.remote._generate_remote_token", lambda: "token-1")
 
     result = runner.invoke(app, ["remote", "enable", "--host", "0.0.0.0", "--port", "9999"])
@@ -820,12 +949,18 @@ def test_remote_token_persists_when_missing(monkeypatch) -> None:
     config = Config()
     saved: dict[str, object] = {}
 
-    monkeypatch.setattr("nomi.cli.commands.remote.load_runtime_config", lambda *_args, **_kwargs: config)
+    monkeypatch.setattr(
+        "nomi.cli.commands.remote.load_runtime_config",
+        lambda *_args, **_kwargs: config,
+    )
     monkeypatch.setattr(
         "nomi.cli.commands.remote.save_config",
         lambda saved_config, path: saved.update({"config": saved_config, "path": path}),
     )
-    monkeypatch.setattr("nomi.cli.commands.remote.get_config_path", lambda: Path("/tmp/config.json"))
+    monkeypatch.setattr(
+        "nomi.cli.commands.remote.get_config_path",
+        lambda: Path("/tmp/config.json"),
+    )
     monkeypatch.setattr("nomi.cli.commands.remote._generate_remote_token", lambda: "token-2")
 
     result = runner.invoke(app, ["remote", "token"])

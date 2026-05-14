@@ -40,8 +40,8 @@ class InstanceInviteCodeTool(_InstanceTool):
 
     @property
     def read_only(self) -> bool:
-        """生成邀请码不修改状态。"""
-        return True
+        """生成邀请码会刷新旧邀请码。"""
+        return False
 
     async def execute(self, public_url: str | None = None, **kwargs: Any) -> str:
         """生成邀请码。"""
@@ -51,11 +51,13 @@ class InstanceInviteCodeTool(_InstanceTool):
 
 @tool_parameters(
     tool_parameters_schema(
-        required=["key"],
-        key=StringSchema("本地关系 key，例如 xmy", min_length=1),
-        invite_code=StringSchema("对方 instance 邀请码", nullable=True),
-        url=StringSchema("对方 instance HTTP URL", nullable=True),
-        token=StringSchema("对方 remote token", nullable=True),
+        required=["invite_code"],
+        invite_code=StringSchema("对方 instance 一次性邀请码", min_length=1),
+        requested_permission=StringSchema(
+            "申请的权限等级，默认 chat",
+            enum=["chat", "task", "all"],
+            nullable=True,
+        ),
     )
 )
 class InstanceInviteTool(_InstanceTool):
@@ -69,25 +71,21 @@ class InstanceInviteTool(_InstanceTool):
     @property
     def description(self) -> str:
         """返回工具说明。"""
-        return "通过邀请码或 url/token 向另一个 Nomi instance 发起好友申请。"
+        return "通过一次性邀请码向另一个 Nomi instance 发起好友申请。"
 
     async def execute(
         self,
-        key: str,
-        invite_code: str | None = None,
-        url: str | None = None,
-        token: str | None = None,
+        invite_code: str,
+        requested_permission: str | None = None,
         **kwargs: Any,
     ) -> str:
         """发起好友申请。"""
         del kwargs
-        await self._runtime.invite_instance(
-            key,
-            url=url,
-            token=token,
+        result = await self._runtime.invite_instance(
             invite_code=invite_code,
+            requested_permission=requested_permission or "chat",
         )
-        return f"已向 {key} 发送好友申请。"
+        return f"已向 {result.get('key') or '对方'} 发送好友申请。"
 
 
 @tool_parameters(tool_parameters_schema(required=[]))
@@ -102,7 +100,7 @@ class InstanceRelationListTool(_InstanceTool):
     @property
     def description(self) -> str:
         """返回工具说明。"""
-        return "列出当前 Nomi instance 已登记的好友关系、备注、状态和权限。"
+        return "列出当前 Nomi instance 的好友关系和待处理申请。"
 
     @property
     def read_only(self) -> bool:
@@ -118,9 +116,10 @@ class InstanceRelationListTool(_InstanceTool):
         lines = ["当前 instance 关系："]
         for item in relations:
             label = item.get("name") or item["key"]
+            direction = item.get("direction") or "-"
             lines.append(
                 f"- {item['key']}（{label}）："
-                f"{item['status']} / {item['permission']} / {item['url']}"
+                f"{item['status']} / {direction} / {item['permission']} / {item['url']}"
             )
         return "\n".join(lines)
 
@@ -148,7 +147,7 @@ class InstanceRelationAcceptTool(_InstanceTool):
     async def execute(self, key: str, permission: str | None = None, **kwargs: Any) -> str:
         """执行好友申请接受。"""
         del kwargs
-        relation = await self._runtime.accept_instance_relation(key, permission or "chat")
+        relation = await self._runtime.accept_instance_relation(key, permission)
         return f"已接受 {relation['key']}，权限：{relation['permission']}。"
 
 
@@ -203,6 +202,59 @@ class InstanceRelationRenameTool(_InstanceTool):
         del kwargs
         relation = self._runtime.rename_instance_relation(key, name)
         return f"已把 {relation['key']} 备注为 {relation['name']}。"
+
+
+@tool_parameters(
+    tool_parameters_schema(
+        required=["key"],
+        key=StringSchema("关系 key，例如 xmy", min_length=1),
+    )
+)
+class InstanceRelationRemoveTool(_InstanceTool):
+    """删除好友关系。"""
+
+    @property
+    def name(self) -> str:
+        """返回工具名。"""
+        return "instance_relation_remove"
+
+    @property
+    def description(self) -> str:
+        """返回工具说明。"""
+        return "删除一个已建立的 Nomi instance 好友关系。"
+
+    async def execute(self, key: str, **kwargs: Any) -> str:
+        """执行关系删除。"""
+        del kwargs
+        await self._runtime.remove_instance_relation(key)
+        return f"已删除 {key} 的 instance 关系。"
+
+
+@tool_parameters(
+    tool_parameters_schema(
+        required=["key", "permission"],
+        key=StringSchema("关系 key，例如 xmy", min_length=1),
+        permission=StringSchema("授权等级", enum=["chat", "task", "all"]),
+    )
+)
+class InstanceRelationSetPermissionTool(_InstanceTool):
+    """修改本地授权。"""
+
+    @property
+    def name(self) -> str:
+        """返回工具名。"""
+        return "instance_relation_set_permission"
+
+    @property
+    def description(self) -> str:
+        """返回工具说明。"""
+        return "修改我允许某个 Nomi instance 对我做什么的权限。"
+
+    async def execute(self, key: str, permission: str, **kwargs: Any) -> str:
+        """执行权限修改。"""
+        del kwargs
+        relation = self._runtime.set_instance_relation_permission(key, permission)
+        return f"已把 {relation['key']} 的权限设置为 {relation['permission']}。"
 
 
 @tool_parameters(

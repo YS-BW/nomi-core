@@ -29,7 +29,10 @@ def test_resolve_instance_context_priority(tmp_path: Path, monkeypatch: pytest.M
     assert context.root == (tmp_path / "explicit-root").resolve()
 
 
-def test_register_and_list_instance_contexts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_register_and_list_instance_contexts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(
         "nomi.config.instance.get_default_instance_root",
         lambda: tmp_path / "default-root",
@@ -48,7 +51,10 @@ def test_register_and_list_instance_contexts(tmp_path: Path, monkeypatch: pytest
     assert listed[1].name == "team-a"
 
 
-def test_default_instance_cannot_be_removed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_instance_cannot_be_removed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(
         "nomi.config.instance.get_instance_registry_path",
         lambda: tmp_path / "instances.json",
@@ -58,7 +64,10 @@ def test_default_instance_cannot_be_removed(tmp_path: Path, monkeypatch: pytest.
         remove_registered_instance(DEFAULT_INSTANCE_NAME)
 
 
-def test_named_instance_default_root_is_under_instances(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_named_instance_default_root_is_under_instances(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(
         "nomi.config.instance.DEFAULT_NAMED_INSTANCES_ROOT",
         tmp_path / "instances",

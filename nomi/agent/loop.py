@@ -201,6 +201,7 @@ class AgentLoop:
             provider=provider,
             model=self.model,
         )
+        self.instance_relation_quick_action_handler = None
         register_default_tools(
             registry=self.tools,
             workspace=self.workspace,

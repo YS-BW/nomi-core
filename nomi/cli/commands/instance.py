@@ -22,6 +22,8 @@ from nomi.config.instance import (
     remove_instance_root,
     remove_registered_instance,
 )
+from nomi.config.loader import get_config_path, save_config
+from nomi.config.schema.instance import InstanceIdentityConfig
 from nomi.runtime.service.runner import (
     follow_log_file,
     restart_background_service,
@@ -78,12 +80,32 @@ def register_instance_command(app: typer.Typer) -> None:
         runtime = make_runtime(loaded_config)
         console.print(runtime.build_instance_invite_code(public_url))
 
+    @instance_app.command("key")
+    def instance_key(
+        new_key: str | None = typer.Argument(None, help="New Nomi instance key"),
+        config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+        instance: str | None = instance_option(),
+        instance_root: str | None = instance_root_option(),
+    ) -> None:
+        """查看或设置当前实例对外 key。"""
+        loaded_config = load_runtime_config(
+            config,
+            None,
+            instance=instance,
+            instance_root=instance_root,
+            silent=True,
+        )
+        if new_key is None:
+            console.print(loaded_config.instance.key)
+            return
+        loaded_config.instance.key = InstanceIdentityConfig(key=new_key).key
+        save_config(loaded_config, get_config_path())
+        console.print(f"[green]✓[/green] instance key 已更新为：{loaded_config.instance.key}")
+
     @instance_app.command("invite")
     def invite(
-        key: str,
-        url: str | None = typer.Option(None, "--url", help="Target instance URL"),
-        token: str | None = typer.Option(None, "--token", help="Target instance token"),
-        from_code: str | None = typer.Option(None, "--from-code", help="Instance invite code"),
+        from_code: str = typer.Option(..., "--from-code", help="Instance invite code"),
+        permission: str = typer.Option("chat", "--permission", help="chat|task|all"),
         config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
         instance: str | None = instance_option(),
         instance_root: str | None = instance_root_option(),
@@ -99,8 +121,13 @@ def register_instance_command(app: typer.Typer) -> None:
         runtime = make_runtime(loaded_config)
         import asyncio
 
-        asyncio.run(runtime.invite_instance(key, url=url, token=token, invite_code=from_code))
-        console.print(f"[green]✓[/green] 已向 {key} 发送好友申请")
+        result = asyncio.run(
+            runtime.invite_instance(
+                invite_code=from_code,
+                requested_permission=permission,
+            )
+        )
+        console.print(f"[green]✓[/green] 已向 {result.get('key') or '对方'} 发送好友申请")
 
     @instance_app.command("relations")
     def relations(
@@ -121,6 +148,7 @@ def register_instance_command(app: typer.Typer) -> None:
         table.add_column("Key", style="cyan", no_wrap=True)
         table.add_column("Name", style="white")
         table.add_column("Status", style="white")
+        table.add_column("Direction", style="white")
         table.add_column("Permission", style="white")
         table.add_column("URL", style="white")
         for relation in runtime.list_instance_relations():
@@ -128,6 +156,7 @@ def register_instance_command(app: typer.Typer) -> None:
                 relation["key"],
                 relation.get("name") or "-",
                 relation.get("status") or "-",
+                relation.get("direction") or "-",
                 relation.get("permission") or "-",
                 relation.get("url") or "-",
             )
@@ -197,6 +226,49 @@ def register_instance_command(app: typer.Typer) -> None:
         runtime = make_runtime(loaded_config)
         relation = runtime.rename_instance_relation(key, name)
         console.print(f"[green]✓[/green] 已把 {relation['key']} 备注为 {relation['name']}")
+
+    @instance_app.command("remove-relation")
+    def remove_relation(
+        key: str,
+        config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+        instance: str | None = instance_option(),
+        instance_root: str | None = instance_root_option(),
+    ) -> None:
+        """删除一条实例好友关系。"""
+        loaded_config = load_runtime_config(
+            config,
+            None,
+            instance=instance,
+            instance_root=instance_root,
+            silent=True,
+        )
+        runtime = make_runtime(loaded_config)
+        import asyncio
+
+        asyncio.run(runtime.remove_instance_relation(key))
+        console.print(f"[green]✓[/green] 已删除实例关系：{key}")
+
+    @instance_app.command("permission")
+    def permission(
+        key: str,
+        permission: str,
+        config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+        instance: str | None = instance_option(),
+        instance_root: str | None = instance_root_option(),
+    ) -> None:
+        """修改本地授予对方的权限。"""
+        loaded_config = load_runtime_config(
+            config,
+            None,
+            instance=instance,
+            instance_root=instance_root,
+            silent=True,
+        )
+        runtime = make_runtime(loaded_config)
+        relation = runtime.set_instance_relation_permission(key, permission)
+        console.print(
+            f"[green]✓[/green] 已把 {relation['key']} 的权限设置为：{relation['permission']}"
+        )
 
     @instance_app.command("send")
     def send(

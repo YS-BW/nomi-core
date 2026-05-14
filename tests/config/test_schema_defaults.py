@@ -82,3 +82,16 @@ def test_transcription_defaults() -> None:
     cfg = Config()
     assert cfg.transcription.api_key == ""
     assert cfg.transcription.api_base == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+
+def test_instance_key_accepts_chinese_and_rejects_path_separators() -> None:
+    """instance.key 允许中文，但不允许作为 session/path 分隔符的字符。"""
+    cfg = Config.model_validate({"instance": {"key": "小美"}})
+    assert cfg.instance.key == "小美"
+
+    import pytest
+
+    with pytest.raises(ValueError):
+        Config.model_validate({"instance": {"key": "bad/key"}})
+    with pytest.raises(ValueError):
+        Config.model_validate({"instance": {"key": "bad:key"}})

@@ -174,8 +174,14 @@ class RemoteServer:
         app.router.add_post("/v1/mcp/{name}/enable", self._handle_enable_mcp)
         app.router.add_post("/v1/mcp/{name}/disable", self._handle_disable_mcp)
 
-        app.router.add_post("/v1/instance/relations/request", self._handle_instance_relation_request)
-        app.router.add_post("/v1/instance/relations/response", self._handle_instance_relation_response)
+        app.router.add_post(
+            "/v1/instance/relations/request",
+            self._handle_instance_relation_request,
+        )
+        app.router.add_post(
+            "/v1/instance/relations/response",
+            self._handle_instance_relation_response,
+        )
         app.router.add_post("/v1/instance/messages", self._handle_instance_message)
 
     @web.middleware
@@ -733,20 +739,50 @@ class RemoteServer:
 
     async def _handle_instance_relation_request(self, request: web.Request) -> web.Response:
         """处理 instance 好友申请。"""
-        self._authorize(request)
-        result = await self._runtime.receive_instance_relation_request(await self._read_json(request))
+        invite_id = str(request.headers.get("X-Nomi-Invite-Id") or "").strip()
+        invite_secret = self._bearer_token(request)
+        if not invite_id or not invite_secret:
+            raise RemoteApiError("unauthorized", "invalid instance invite credentials", status=401)
+        result = await self._runtime.receive_instance_relation_request(
+            await self._read_json(request),
+            invite_id=invite_id,
+            invite_secret=invite_secret,
+        )
         return web.json_response(result)
 
     async def _handle_instance_relation_response(self, request: web.Request) -> web.Response:
         """处理 instance 好友申请确认结果。"""
-        self._authorize(request)
-        result = await self._runtime.receive_instance_relation_response(await self._read_json(request))
+        token = self._bearer_token(request)
+        if not token:
+            raise RemoteApiError(
+                "unauthorized",
+                "missing instance relation credentials",
+                status=401,
+            )
+        relation_id = str(request.headers.get("X-Nomi-Relation-Id") or "").strip() or None
+        result = await self._runtime.receive_instance_relation_response(
+            await self._read_json(request),
+            response_token=token if relation_id is None else None,
+            relation_id=relation_id,
+            relation_token=token if relation_id is not None else None,
+        )
         return web.json_response(result)
 
     async def _handle_instance_message(self, request: web.Request) -> web.Response:
         """处理 instance 聊天消息。"""
-        self._authorize(request)
-        result = await self._runtime.receive_instance_message(await self._read_json(request))
+        relation_id = str(request.headers.get("X-Nomi-Relation-Id") or "").strip()
+        relation_token = self._bearer_token(request)
+        if not relation_id or not relation_token:
+            raise RemoteApiError(
+                "unauthorized",
+                "missing instance relation credentials",
+                status=401,
+            )
+        result = await self._runtime.receive_instance_message(
+            await self._read_json(request),
+            relation_id=relation_id,
+            relation_token=relation_token,
+        )
         return web.json_response(result)
 
     async def _handle_outbound(self, message: OutboundMessage) -> None:
@@ -963,6 +999,15 @@ class RemoteServer:
         raise RemoteApiError("unauthorized", "unauthorized", status=401)
 
     @staticmethod
+    def _bearer_token(request: web.Request) -> str:
+        """读取 Authorization Bearer token。"""
+        auth = str(request.headers.get("Authorization", "") or "").strip()
+        prefix = "Bearer "
+        if not auth.startswith(prefix):
+            return ""
+        return auth[len(prefix) :].strip()
+
+    @staticmethod
     async def _read_json(request: web.Request) -> dict[str, Any]:
         """读取 JSON 请求体。"""
         if request.can_read_body:
@@ -984,7 +1029,10 @@ class RemoteServer:
     def _with_cors(response: web.StreamResponse) -> web.StreamResponse:
         """给 remote HTTP/SSE 响应补充浏览器跨源访问头。"""
         response.headers.setdefault("Access-Control-Allow-Origin", "*")
-        response.headers.setdefault("Access-Control-Allow-Headers", "Authorization, Content-Type")
+        response.headers.setdefault(
+            "Access-Control-Allow-Headers",
+            "Authorization, Content-Type, X-Nomi-Invite-Id, X-Nomi-Relation-Id",
+        )
         response.headers.setdefault(
             "Access-Control-Allow-Methods",
             "GET, POST, PATCH, PUT, DELETE, OPTIONS",

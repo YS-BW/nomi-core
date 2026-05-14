@@ -402,6 +402,27 @@ class TurnProcessor:
                 session_key=key,
             )
 
+        instance_relation_handler = getattr(
+            loop,
+            "instance_relation_quick_action_handler",
+            None,
+        )
+        if instance_relation_handler is not None:
+            instance_relation_result = await instance_relation_handler(msg.content)
+            if instance_relation_result is not None:
+                loop._clear_interrupt_state(key)
+                return DirectProcessResult(
+                    outbound=OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content=instance_relation_result,
+                        metadata=dict(msg.metadata or {}),
+                    ),
+                    final_content=instance_relation_result,
+                    stop_reason="instance_relation_quick_action",
+                    session_key=key,
+                )
+
         raw = msg.content.strip()
         ctx = loop._build_command_context(msg=msg, session=session, key=key, raw=raw)
         if result := await loop.commands.dispatch(ctx):

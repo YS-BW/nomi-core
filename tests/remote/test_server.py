@@ -524,19 +524,40 @@ class _FakeRuntime:
             "provider_state": self.provider_state,
         }
 
-    async def receive_instance_relation_request(self, payload: dict) -> dict:
+    async def receive_instance_relation_request(
+        self,
+        payload: dict,
+        *,
+        invite_id: str,
+        invite_secret: str,
+    ) -> dict:
         """记录 instance 关系请求。"""
-        self.instance_calls.append(("request", payload))
+        self.instance_calls.append(("request", payload, invite_id, invite_secret))
         return {"ok": True, "status": "pending", "key": payload.get("from_key")}
 
-    async def receive_instance_relation_response(self, payload: dict) -> dict:
+    async def receive_instance_relation_response(
+        self,
+        payload: dict,
+        *,
+        response_token: str | None = None,
+        relation_id: str | None = None,
+        relation_token: str | None = None,
+    ) -> dict:
         """记录 instance 关系响应。"""
-        self.instance_calls.append(("response", payload))
+        self.instance_calls.append(
+            ("response", payload, response_token, relation_id, relation_token)
+        )
         return {"ok": True, "status": payload.get("status"), "key": payload.get("from_key")}
 
-    async def receive_instance_message(self, payload: dict) -> dict:
+    async def receive_instance_message(
+        self,
+        payload: dict,
+        *,
+        relation_id: str,
+        relation_token: str,
+    ) -> dict:
         """记录 instance 消息。"""
-        self.instance_calls.append(("message", payload))
+        self.instance_calls.append(("message", payload, relation_id, relation_token))
         if payload.get("from_key") == "blocked":
             raise PermissionError("instance relation blocked does not allow chat")
         return {
@@ -550,48 +571,86 @@ class _FakeRuntime:
 class _RelationRuntime:
     """测试用真实关系握手 runtime。"""
 
-    def __init__(self, *, key: str, url: str, token: str) -> None:
+    def __init__(self, *, key: str, url: str) -> None:
         """初始化一份关系状态。"""
         from nomi.instance_channel.manager import InstanceRelationManager
-        from nomi.instance_channel.store import InstanceRelationStore
+        from nomi.instance_channel.store import (
+            InstanceInviteStore,
+            InstanceRelationRequestStore,
+            InstanceRelationStore,
+        )
 
         self.key = key
         self.url = url
-        self.token = token
         self.bus = MessageBus()
         self.agent_loop = SimpleNamespace(sessions=_FakeSessions())
         self._tmpdir = tempfile.TemporaryDirectory()
         self.instance_relations = InstanceRelationManager(
-            store=InstanceRelationStore(Path(self._tmpdir.name) / "instance-relations.json")
+            invite_store=InstanceInviteStore(Path(self._tmpdir.name) / "instance-invite.json"),
+            request_store=InstanceRelationRequestStore(
+                Path(self._tmpdir.name) / "instance-requests.json"
+            ),
+            relation_store=InstanceRelationStore(
+                Path(self._tmpdir.name) / "instance-relations.json"
+            ),
         )
 
-    async def receive_instance_relation_request(self, payload: dict) -> dict:
+    def build_invite(self) -> tuple[str, str]:
+        """生成测试用邀请码凭证。"""
+        invite, secret = self.instance_relations.build_invite(key=self.key, url=self.url)
+        return invite.invite_id, secret
+
+    async def receive_instance_relation_request(
+        self,
+        payload: dict,
+        *,
+        invite_id: str,
+        invite_secret: str,
+    ) -> dict:
         """处理关系申请。"""
-        relation = self.instance_relations.upsert_pending(
+        invite = self.instance_relations.consume_invite(
+            invite_id=invite_id,
+            secret=invite_secret,
+        )
+        request = self.instance_relations.create_incoming_request(
             key=str(payload["from_key"]),
             url=str(payload["from_url"]),
-            token=str(payload["from_token"]),
+            requested_permission=str(payload["requested_permission"]),
+            response_token=str(payload["response_token"]),
+            invite_id=invite.invite_id,
         )
-        return {"ok": True, "status": relation.status, "key": relation.key}
+        return {"ok": True, "status": "pending", "key": request.key}
 
-    async def receive_instance_relation_response(self, payload: dict) -> dict:
+    async def receive_instance_relation_response(
+        self,
+        payload: dict,
+        *,
+        response_token: str | None = None,
+        relation_id: str | None = None,
+        relation_token: str | None = None,
+    ) -> dict:
         """处理关系确认。"""
-        key = str(payload.get("from_key") or "").strip().lower()
-        relation = self.instance_relations.get_relation(key)
-        if relation is None:
-            from_url = str(payload.get("from_url") or "").strip().rstrip("/")
-            from_token = str(payload.get("from_token") or "").strip()
-            relation = self.instance_relations.find_relation_by_endpoint(from_url, from_token)
-            if relation is None:
-                relation = self.instance_relations.upsert_pending(
-                    key=key,
-                    url=from_url,
-                    token=from_token,
-                )
-        relation.status = str(payload["status"])
-        relation.permission = str(payload["permission"])
-        self.instance_relations.store.put(relation)
-        return {"ok": True, "status": relation.status, "key": relation.key}
+        key = str(payload.get("from_key") or "").strip()
+        if str(payload.get("status")) == "accepted":
+            request = self.instance_relations.get_request(key)
+            if request is None or request.response_token != response_token:
+                raise PermissionError("invalid response token")
+            relation = self.instance_relations.accept_outgoing(
+                key=key,
+                url=str(payload.get("from_url") or request.url),
+                relation_id=str(payload["relation_id"]),
+                relation_token=str(payload["relation_token"]),
+            )
+            return {"ok": True, "status": "accepted", "key": relation.key}
+        if str(payload.get("status")) == "removed":
+            relation = self.instance_relations.require_by_relation_token(
+                relation_id=str(relation_id or ""),
+                token=str(relation_token or ""),
+            )
+            self.instance_relations.apply_remote_remove(relation)
+            return {"ok": True, "status": "removed", "key": relation.key}
+        self.instance_relations.reject_outgoing(key)
+        return {"ok": True, "status": "rejected", "key": key}
 
 
 def _config(port: int) -> Config:
@@ -948,22 +1007,33 @@ async def test_remote_instance_channel_routes_require_auth_and_delegate() -> Non
 
             request = await client.post(
                 "http://127.0.0.1:8892/v1/instance/relations/request",
-                headers=_auth(),
-                json={"from_key": "xmy", "from_url": "http://127.0.0.1:8766", "from_token": "t"},
+                headers={
+                    "X-Nomi-Invite-Id": "inv-1",
+                    "Authorization": "Bearer invite-secret",
+                },
+                json={
+                    "from_key": "xmy",
+                    "from_url": "http://127.0.0.1:8766",
+                    "requested_permission": "chat",
+                    "response_token": "response-token",
+                },
             )
             assert request.status_code == 200
             assert request.json()["status"] == "pending"
 
             response = await client.post(
                 "http://127.0.0.1:8892/v1/instance/relations/response",
-                headers=_auth(),
-                json={"from_key": "xmy", "status": "friend", "permission": "chat"},
+                headers={"Authorization": "Bearer response-token"},
+                json={"from_key": "xmy", "status": "accepted"},
             )
             assert response.status_code == 200
 
             message = await client.post(
                 "http://127.0.0.1:8892/v1/instance/messages",
-                headers=_auth(),
+                headers={
+                    "X-Nomi-Relation-Id": "rel-1",
+                    "Authorization": "Bearer relation-token",
+                },
                 json={"from_key": "xmy", "content": "ping"},
             )
             assert message.status_code == 200
@@ -971,7 +1041,10 @@ async def test_remote_instance_channel_routes_require_auth_and_delegate() -> Non
 
             forbidden = await client.post(
                 "http://127.0.0.1:8892/v1/instance/messages",
-                headers=_auth(),
+                headers={
+                    "X-Nomi-Relation-Id": "rel-1",
+                    "Authorization": "Bearer relation-token",
+                },
                 json={"from_key": "blocked", "content": "ping"},
             )
             assert forbidden.status_code == 403
@@ -983,12 +1056,15 @@ async def test_remote_instance_channel_routes_require_auth_and_delegate() -> Non
                 {
                     "from_key": "xmy",
                     "from_url": "http://127.0.0.1:8766",
-                    "from_token": "t",
+                    "requested_permission": "chat",
+                    "response_token": "response-token",
                 },
+                "inv-1",
+                "invite-secret",
             ),
-            ("response", {"from_key": "xmy", "status": "friend", "permission": "chat"}),
-            ("message", {"from_key": "xmy", "content": "ping"}),
-            ("message", {"from_key": "blocked", "content": "ping"}),
+            ("response", {"from_key": "xmy", "status": "accepted"}, "response-token", None, None),
+            ("message", {"from_key": "xmy", "content": "ping"}, "rel-1", "relation-token"),
+            ("message", {"from_key": "blocked", "content": "ping"}, "rel-1", "relation-token"),
         ]
     finally:
         await server.stop()
@@ -1000,12 +1076,10 @@ async def test_remote_instance_relation_http_accept_round_trip() -> None:
     runtime_a = _RelationRuntime(
         key="a",
         url="http://127.0.0.1:8893",
-        token="token-a",
     )
     runtime_b = _RelationRuntime(
         key="b",
         url="http://127.0.0.1:8894",
-        token="token-b",
     )
     config_a = _config(8893)
     config_b = _config(8894)
@@ -1018,37 +1092,50 @@ async def test_remote_instance_relation_http_accept_round_trip() -> None:
     await server_b.start()
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
+            invite_id, invite_secret = runtime_b.build_invite()
+            response_token = "response-token-a"
+            runtime_a.instance_relations.create_outgoing_request(
+                key="b",
+                url="http://127.0.0.1:8894",
+                requested_permission="chat",
+                response_token=response_token,
+                invite_id=invite_id,
+            )
             request = await client.post(
                 "http://127.0.0.1:8894/v1/instance/relations/request",
-                headers={"Authorization": "Bearer token-b"},
+                headers={
+                    "X-Nomi-Invite-Id": invite_id,
+                    "Authorization": f"Bearer {invite_secret}",
+                },
                 json={
                     "from_key": "a",
                     "from_url": "http://127.0.0.1:8893",
-                    "from_token": "token-a",
+                    "requested_permission": "chat",
+                    "response_token": response_token,
                 },
             )
             assert request.status_code == 200
 
-            relation_b = runtime_b.instance_relations.get_relation("a")
-            assert relation_b is not None
-            assert relation_b.status == "pending"
+            request_b = runtime_b.instance_relations.get_request("a")
+            assert request_b is not None
+            _, relation_b = runtime_b.instance_relations.accept_incoming("a", "chat")
 
             accept = await client.post(
                 "http://127.0.0.1:8893/v1/instance/relations/response",
-                headers={"Authorization": "Bearer token-a"},
+                headers={"Authorization": f"Bearer {response_token}"},
                 json={
                     "from_key": "b",
                     "from_url": "http://127.0.0.1:8894",
-                    "from_token": "token-b",
-                    "status": "friend",
-                    "permission": "chat",
+                    "status": "accepted",
+                    "relation_id": relation_b.relation_id,
+                    "relation_token": relation_b.relation_token,
                 },
             )
             assert accept.status_code == 200
 
             relation_a = runtime_a.instance_relations.get_relation("b")
             assert relation_a is not None
-            assert relation_a.status == "friend"
+            assert relation_a.relation_id == relation_b.relation_id
             assert relation_a.permission == "chat"
     finally:
         await server_a.stop()

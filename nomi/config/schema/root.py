@@ -10,6 +10,7 @@ from pydantic_settings import BaseSettings
 
 from .agent import AgentsConfig
 from .channel import ChannelConfig
+from .instance import InstanceIdentityConfig
 from .provider import ProvidersConfig
 from .remote import RemoteConfig
 from .skills import SkillsConfig
@@ -27,6 +28,7 @@ class Config(BaseSettings):
     transcription: TranscriptionConfig = Field(default_factory=TranscriptionConfig)
     channel: ChannelConfig = Field(default_factory=ChannelConfig)
     remote: RemoteConfig = Field(default_factory=RemoteConfig)
+    instance: InstanceIdentityConfig = Field(default_factory=InstanceIdentityConfig)
 
     @property
     def workspace_path(self) -> Path:

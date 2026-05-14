@@ -8,8 +8,10 @@ from pathlib import Path
 import pydantic
 
 from nomi.config.instance import (
+    DEFAULT_INSTANCE_NAME,
     InstanceContext,
     ensure_instance_layout,
+    get_instance_name,
     get_instance_root,
     resolve_instance_context,
     set_instance_context,
@@ -202,6 +204,9 @@ def _raise_if_removed_keys_present(data: object, path: Path) -> None:
 def _apply_instance_defaults(config: Config) -> Config:
     """把实例 root 相关默认路径写回配置对象。"""
     instance_root = get_instance_root()
+    instance_name = get_instance_name() or DEFAULT_INSTANCE_NAME
+    if not str(config.instance.key or "").strip():
+        config.instance.key = instance_name
     default_workspace = (Path.home() / ".nomi" / "workspace").resolve(strict=False)
     current_workspace = Path(config.agents.defaults.workspace).expanduser().resolve(strict=False)
     if current_workspace == default_workspace:
