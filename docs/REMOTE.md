@@ -197,7 +197,7 @@ POST /v1/instance/relations/response
 POST /v1/instance/messages
 ```
 
-这三条路由复用 remote listener 和 Bearer token，但属于 core 内部实例通道，不属于 desktop 的 `nomi-protocol` 公开协议面。详情见 [INSTANCE_CHANNEL.md](./INSTANCE_CHANNEL.md)。
+这三条路由复用 remote listener，但不使用 `remote.auth_token` 表示好友身份；申请使用一次性邀请码 secret，消息和删除使用 relation token。它们属于 core 内部实例通道，不属于 desktop 的 `nomi-protocol` 公开协议面。详情见 [INSTANCE_CHANNEL.md](./INSTANCE_CHANNEL.md)。
 
 ## SSE
 

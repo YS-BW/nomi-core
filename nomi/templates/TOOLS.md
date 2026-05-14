@@ -83,12 +83,15 @@
 ## 9. `instance_*`
 
 - 实例之间加好友、确认关系、备注和聊天时，优先使用 instance 工具，不要用 `exec` 拼 CLI 命令
-- 生成当前实例邀请码用 `instance_invite_code(public_url=...)`
-- 用对方邀请码发起好友申请用 `instance_invite(key=..., invite_code=...)`
-- 如果用户直接给了对方 URL 和 token，也可以用 `instance_invite(key=..., url=..., token=...)`
+- 生成当前实例一次性邀请码用 `instance_invite_code(public_url=...)`；每次生成都会刷新旧邀请码
+- 用对方邀请码发起好友申请用 `instance_invite(invite_code=..., requested_permission=...)`
+- 不要再用 URL/token 加好友；remote token 只属于 desktop/remote API，不代表好友身份
 - 查看关系列表用 `instance_relation_list()`
 - 同意好友申请用 `instance_relation_accept(key=..., permission=...)`，`permission` 可选 `chat`、`task`、`all`
 - 拒绝好友申请用 `instance_relation_reject(key=...)`
+- 删除好友关系用 `instance_relation_remove(key=...)`，不要用 reject 删除已建立关系
+- 修改我授予对方的权限用 `instance_relation_set_permission(key=..., permission=...)`
+- 收到好友申请通知后，用户只回复“同意”“信任”“拒绝”时，系统会优先按唯一待确认申请直接处理；有多个待确认申请时必须带 key，例如“信任 xmy”
 - 给关系设置备注用 `instance_relation_rename(key=..., name=...)`
 - 给另一个实例发消息用 `instance_send_message(key=..., message=...)`
 - 用户问“你刚才和哪个 Nomi 聊了什么”时，用 `instance_session_list()` 找最近 instance 会话，再用 `instance_session_get(key=...)` 读取具体聊天内容

@@ -86,11 +86,13 @@ Nomi 当前的工具系统已经接入主链路，不是外挂功能 🧰
 
 | 工具 | 说明 |
 |---|---|
-| `instance_invite_code` | 生成当前实例的邀请码 |
-| `instance_invite` | 通过邀请码或 url/token 向另一个实例发起好友申请 |
-| `instance_relation_list` | 查看当前实例登记的关系、备注、状态和权限 |
+| `instance_invite_code` | 生成当前实例的一次性邀请码 |
+| `instance_invite` | 通过一次性邀请码向另一个实例发起好友申请 |
+| `instance_relation_list` | 查看当前实例的好友关系和待处理申请 |
 | `instance_relation_accept` | 接受一个实例好友申请 |
 | `instance_relation_reject` | 拒绝一个实例好友申请 |
+| `instance_relation_remove` | 删除一个已建立的实例好友关系 |
+| `instance_relation_set_permission` | 修改我授予对方的权限 |
 | `instance_relation_rename` | 设置或更新实例关系备注 |
 | `instance_send_message` | 向已成为好友且具备 `chat` 权限的实例发送消息 |
 | `instance_session_list` | 查看最近 instance 聊天会话 |
@@ -98,11 +100,11 @@ Nomi 当前的工具系统已经接入主链路，不是外挂功能 🧰
 
 实现文件：
 
-- [nomi/agent/tools/instance_relations.py](../nomi/agent/tools/instance_relations.py#L19-L311)
+- [nomi/agent/tools/instance_relations.py](../nomi/agent/tools/instance_relations.py#L19-L363)
 
-这些工具由 `NomiRuntime` 挂载，因为它们需要访问当前实例的关系存储、remote token 和 InstanceChannel client：
+这些工具由 `NomiRuntime` 挂载，因为它们需要访问当前实例的关系存储和 InstanceChannel client：
 
-- [nomi/runtime/app.py](../nomi/runtime/app.py#L1655-L1680)
+- [nomi/runtime/app.py](../nomi/runtime/app.py#L1833-L1872)
 
 工具使用说明不是 workspace 文件。`nomi/templates/TOOLS.md` 会由 system prompt builder 内置注入，`sync_workspace_templates()` 不再生成 `workspace/TOOLS.md`。
 

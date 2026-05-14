@@ -1,14 +1,18 @@
 # Instance Channel
 
-Instance Channel 是实例之间的基础关系与聊天通道。它不是新的独立 service，也不引入 `peer` 概念；当前实现直接挂在统一 `InstanceRuntime` 上，并复用 remote HTTP listener。
+Instance Channel 是实例之间的基础关系与聊天通道。它不是独立 service，也不引入 `peer` 概念；当前实现复用 instance runtime 的 remote HTTP listener。
 
 ## 当前语义
 
-一个实例可以把另一个实例登记为关系对象。关系状态固定为：
+当前关系模型固定为：
 
-- `pending`：已收到或已发出申请，尚未确认。
-- `friend`：已确认好友关系。
-- `trusted`：已确认可信任关系。
+- `instance.key` 是用户给自己 Nomi 设置的名字，默认由实例名推导，允许中文，但不能包含 `:` 或 `/`。
+- `name` 是我给对方 Nomi 的本地备注，只影响展示，不影响关系 key 和 session id。
+- 邀请码只用于发起申请，每次生成都会刷新旧邀请码。
+- 申请只保存在 pending request 中，接受或拒绝后会删除。
+- 接受后才写入 relation，并生成 `relation_id + relation_token`。
+- 删除关系时物理删除本地 relation 和 token，并尽力通知对方删除。
+- `permission` 只表示“我允许对方对我做什么”，不保存对方授予我的权限。
 
 权限固定为：
 
@@ -20,13 +24,47 @@ Instance Channel 是实例之间的基础关系与聊天通道。它不是新的
 
 ## 存储
 
-关系文件位于当前 instance root：
+当前 instance root 下有三类关系文件：
 
 ```text
+<instance-root>/instance-invite.json
+<instance-root>/instance-requests.json
 <instance-root>/instance-relations.json
 ```
 
-结构：
+`instance-invite.json` 保存当前唯一有效邀请码：
+
+```json
+{
+  "version": 1,
+  "invite_id": "inv_xxx",
+  "secret_hash": "sha256...",
+  "url": "http://127.0.0.1:8765",
+  "key": "default",
+  "created_at_ms": 1770000000000,
+  "used_at_ms": null
+}
+```
+
+`instance-requests.json` 只保存 pending 申请：
+
+```json
+{
+  "version": 1,
+  "requests": {
+    "xmy": {
+      "direction": "incoming",
+      "url": "http://127.0.0.1:8766",
+      "requested_permission": "chat",
+      "response_token": "xxx",
+      "invite_id": "inv_xxx",
+      "created_at_ms": 1770000000000
+    }
+  }
+}
+```
+
+`instance-relations.json` 只保存已接受关系：
 
 ```json
 {
@@ -35,23 +73,34 @@ Instance Channel 是实例之间的基础关系与聊天通道。它不是新的
     "xmy": {
       "name": "小美",
       "url": "http://127.0.0.1:8766",
-      "token": "remote-token",
-      "status": "friend",
+      "relation_id": "rel_xxx",
+      "relation_token": "xxx",
       "permission": "chat",
+      "created_at_ms": 1770000000000,
       "updated_at_ms": 1770000000000
     }
   }
 }
 ```
 
-关系读写由 `InstanceRelationStore` 负责，并用文件锁保护单文件更新：
+旧版 `token/status` 关系结构不会迁移；缺少 `relation_id/relation_token/url` 的旧关系会 fail-closed。
 
-- [nomi/instance_channel/store.py](../nomi/instance_channel/store.py#L12-L99)
-- [nomi/config/paths.py](../nomi/config/paths.py#L84-L86)
+关键实现：
+
+- [nomi/instance_channel/store.py](../nomi/instance_channel/store.py#L18-L205)
+- [nomi/instance_channel/models.py](../nomi/instance_channel/models.py#L17-L156)
+- [nomi/config/paths.py](../nomi/config/paths.py#L84-L98)
 
 ## 邀请流程
 
-1. A 生成邀请码：
+1. A 设置或查看自己的对外 key：
+
+```bash
+nomi instance key
+nomi instance key 小美
+```
+
+2. A 生成一次性邀请码：
 
 ```bash
 nomi instance invite-code --url http://127.0.0.1:8765
@@ -60,36 +109,42 @@ nomi instance invite-code --url http://127.0.0.1:8765
 邀请码格式：
 
 ```text
-nomi://instance-invite?name=<instance-name>&url=<url>&token=<remote-token>
+nomi://instance-invite?v=1&key=<my-key>&url=<url>&invite_id=<id>&secret=<secret>
 ```
 
-2. B 使用邀请码向 A 申请，本地 `<key>` 是 B 给 A 设置的关系 key，邀请码里的实例名会先作为备注保存：
+3. B 使用邀请码向 A 申请：
 
 ```bash
-nomi instance invite xmy --from-code '<invite-code>'
+nomi instance invite --from-code '<invite-code>' --permission chat
 ```
 
-3. A 收到申请后写入 `pending/chat`，并通过实例级全局提醒通知所有已运行入口：
+申请体会携带 B 的 `key/url/requested_permission/response_token`。A 校验 `invite_id + secret` 成功后立即把邀请码标记为已使用，并写入 incoming pending request。
+
+4. A 收到申请后发送实例级全局提醒：
 
 ```text
-xmy 想添加你为好友。可以回复：同意添加 xmy / 拒绝 xmy / 信任 xmy
+xmy 发来好友申请，请求 chat 权限。可以回复：同意 / 拒绝 / 信任
 ```
 
-4. A 接受、拒绝或设置备注：
+如果当前只有一个待确认申请，用户可以在任意入口直接回复 `同意`、`拒绝` 或 `信任`。这类短回复会在 core 侧确定性处理，不进入模型工具选择；如果同时存在多个待确认申请，必须带上关系 key，例如 `信任 xmy`。
+
+5. A 接受、拒绝、备注、删除或改权限：
 
 ```bash
 nomi instance accept xmy --permission chat
 nomi instance reject xmy
 nomi instance rename xmy 小美
+nomi instance permission xmy all
+nomi instance remove-relation xmy
 ```
 
-5. 关系确认后，双方都更新为 `friend` 或 `trusted`，并再次发送全局通知提示设置备注。
+接受后 A 本地生成 `relation_id + relation_token` 并写入 relation，再用申请里的 `response_token` 回调 B。B 收到 accepted 后删除 outgoing request，写入 relation；B 本地授予 A 的 `permission` 默认是 `chat`，之后可自行调整。
 
-核心流程在：
+核心流程：
 
-- [nomi/runtime/app.py](../nomi/runtime/app.py#L171-L350)
-- [nomi/instance_channel/manager.py](../nomi/instance_channel/manager.py#L19-L143)
-- [nomi/instance_channel/invite.py](../nomi/instance_channel/invite.py#L11-L40)
+- [nomi/runtime/app.py](../nomi/runtime/app.py#L174-L472)
+- [nomi/instance_channel/manager.py](../nomi/instance_channel/manager.py#L31-L315)
+- [nomi/instance_channel/invite.py](../nomi/instance_channel/invite.py#L12-L42)
 
 ## HTTP 通道
 
@@ -108,13 +163,18 @@ POST /v1/instance/relations/response
 POST /v1/instance/messages
 ```
 
-这些路由继续使用 `Authorization: Bearer <remote.auth_token>` 鉴权，但不属于 `nomi-protocol` 对 desktop 的公开协议面。
+鉴权规则：
+
+- `/relations/request` 使用 `X-Nomi-Invite-Id` 和 `Authorization: Bearer <invite-secret>`。
+- `/relations/response` 的 accepted/rejected 回调用 `Authorization: Bearer <response-token>`。
+- `/relations/response` 的 removed 通知使用 `X-Nomi-Relation-Id` 和 `Authorization: Bearer <relation-token>`。
+- `/messages` 使用 `X-Nomi-Relation-Id` 和 `Authorization: Bearer <relation-token>`。
+- `remote.auth_token` 只用于 desktop/remote API，不再代表好友身份。
 
 路由入口：
 
-- [nomi/remote/server.py](../nomi/remote/server.py#L177-L179)
-- [nomi/remote/server.py](../nomi/remote/server.py#L724-L740)
-- [nomi/instance_channel/client.py](../nomi/instance_channel/client.py#L8-L34)
+- [nomi/remote/server.py](../nomi/remote/server.py#L740-L786)
+- [nomi/instance_channel/client.py](../nomi/instance_channel/client.py#L15-L82)
 
 ## 聊天身份
 
@@ -131,11 +191,6 @@ actor = "instance"
 
 - [nomi/templates/CHANNEL_INSTANCE.md](../nomi/templates/CHANNEL_INSTANCE.md#L1-L5)
 - [nomi/agent/context/system_prompt.py](../nomi/agent/context/system_prompt.py#L69-L79)
-
-消息执行入口：
-
-- [nomi/runtime/app.py](../nomi/runtime/app.py#L352-L385)
-- [nomi/agent/loop_runtime/dispatch.py](../nomi/agent/loop_runtime/dispatch.py#L138-L165)
 
 ## Instance 会话
 
@@ -164,7 +219,9 @@ instance:<relation-key>
 }
 ```
 
-接收消息时，如果 `from_key` 和本地关系 key 不一致，runtime 会用 `from_url/from_token` 按 endpoint 匹配已有关系。
+消息执行入口：
+
+- [nomi/runtime/app.py](../nomi/runtime/app.py#L358-L517)
 
 ## Agent 工具
 
@@ -175,22 +232,27 @@ instance:<relation-key>
 - `instance_relation_list`
 - `instance_relation_accept`
 - `instance_relation_reject`
+- `instance_relation_remove`
+- `instance_relation_set_permission`
 - `instance_relation_rename`
 - `instance_send_message`
 - `instance_session_list`
 - `instance_session_get`
 
-工具定义在 [nomi/agent/tools/instance_relations.py](../nomi/agent/tools/instance_relations.py#L19-L311)，由 runtime 在初始化和 reload 后注册：
+工具定义在 [nomi/agent/tools/instance_relations.py](../nomi/agent/tools/instance_relations.py#L19-L363)，由 runtime 在初始化和 reload 后注册：
 
-- [nomi/runtime/app.py](../nomi/runtime/app.py#L1655-L1680)
+- [nomi/runtime/app.py](../nomi/runtime/app.py#L1833-L1872)
 
 用户可以在微信、desktop 或 CLI 里自然表达：
 
 ```text
 生成我的 instance 邀请码，地址用 http://127.0.0.1:8765
-用这个邀请码添加 default：nomi://instance-invite?...
-同意添加 xmy
+用这个邀请码加好友：nomi://instance-invite?...
+同意
+信任 xmy
 备注 xmy 为 小美
+删除 xmy 好友
+把 xmy 权限改为 all
 问一下小美几点方便
 你刚才和小美聊了什么
 ```
@@ -203,9 +265,8 @@ instance:<relation-key>
 - 独立 instance relation service。
 - 独立端口。
 - desktop 协议变更。
+- 旧版关系迁移。
 - `task_request`、skill/MCP 授权执行。
 - 关系冲突自动改名。
 
-如果同一个 key 已存在但 url/token 不一致，会直接拒绝为关系冲突；如果相同关系重复申请，已有 `friend/trusted` 状态不会被降级回 `pending`。
-
-关系确认回调时，如果对方返回的 `from_key` 和本地 key 不一致，runtime 会优先按 url/token 命中已有关系，避免因为双方命名不同而创建第二条关系。
+如果同一个 key 已存在 relation 或 pending request，新的申请会直接拒绝。删除好友关系会删除本地 relation，并尽力通知对方删除。
