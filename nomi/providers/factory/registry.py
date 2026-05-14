@@ -329,7 +329,6 @@ def build_provider_state(config) -> dict[str, Any]:
     """构造供远端 UI 消费的 provider 当前持久化状态。"""
 
     active_provider = _normalize_provider_name(str(config.agents.defaults.provider or ""))
-    active_model = str(config.agents.defaults.model or "").strip()
     providers: list[dict[str, Any]] = []
 
     for spec in PROVIDERS:
@@ -337,6 +336,8 @@ def build_provider_state(config) -> dict[str, Any]:
         api_key = str(provider_config.api_key or "").strip()
         api_base = _normalize_optional_text(provider_config.api_base)
         effective_api_base = api_base or (spec.default_api_base or None)
+        saved_model = _normalize_optional_text(getattr(provider_config, "model", None))
+        token_plan_api_key = str(getattr(provider_config, "token_plan_api_key", "") or "").strip()
         providers.append(
             {
                 "provider": spec.name,
@@ -346,8 +347,16 @@ def build_provider_state(config) -> dict[str, Any]:
                 "editable": True,
                 "deletable": False,
                 "api_key_set": bool(api_key),
+                "api_key": api_key,
                 "api_key_preview": _build_api_key_preview(api_key),
-                "saved_model": _normalize_optional_text(getattr(provider_config, "model", None)),
+                "token_plan_api_key_set": bool(token_plan_api_key)
+                if spec.name == "mimo"
+                else None,
+                "token_plan_api_key": token_plan_api_key if spec.name == "mimo" else None,
+                "token_plan_api_key_preview": _build_api_key_preview(token_plan_api_key)
+                if spec.name == "mimo"
+                else None,
+                "saved_model": saved_model,
                 "api_base": effective_api_base,
                 "api_base_editable": spec.name == "custom",
                 "default_api_base": spec.default_api_base or None,
@@ -359,7 +368,7 @@ def build_provider_state(config) -> dict[str, Any]:
         "providers": providers,
         "active": {
             "provider": active_provider,
-            "model": active_model,
+            "model": _resolve_provider_model(config, active_provider),
         },
         "apply_mode": "reload_runtime",
     }
@@ -376,6 +385,20 @@ def _normalize_optional_text(value: object) -> str | None:
 
     text = str(value or "").strip()
     return text or None
+
+
+def _resolve_provider_model(config, provider_name: str) -> str:
+    """按 provider 配置和模型目录解析 provider 当前模型。"""
+    from nomi.providers.factory.model_catalog import list_models
+
+    provider_config = getattr(config.providers, provider_name, None)
+    saved_model = _normalize_optional_text(getattr(provider_config, "model", None))
+    if saved_model:
+        return saved_model
+    catalog = list_models(provider_name)
+    if catalog:
+        return catalog[0].name
+    return "mimo-v2.5"
 
 
 def _build_api_key_preview(api_key: str) -> str | None:

@@ -496,9 +496,17 @@ class RemoteServer:
         result = self._runtime.update_provider(
             request.match_info["provider"],
             api_key=payload.api_key if "api_key" in fields else Ellipsis,
+            token_plan_api_key=(
+                payload.token_plan_api_key if "token_plan_api_key" in fields else Ellipsis
+            ),
             api_base=payload.api_base if "api_base" in fields else Ellipsis,
             model=payload.model if "model" in fields else Ellipsis,
             clear_api_key=payload.clear_api_key if "clear_api_key" in fields else Ellipsis,
+            clear_token_plan_api_key=(
+                payload.clear_token_plan_api_key
+                if "clear_token_plan_api_key" in fields
+                else Ellipsis
+            ),
         )
         await self._events.publish(
             "provider.settings_updated",

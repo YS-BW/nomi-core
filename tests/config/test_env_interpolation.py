@@ -127,6 +127,25 @@ class TestResolveConfig:
         assert loaded.channel.weixin.token == "bot-token"
         assert loaded.channel.weixin.poll_timeout == 45
 
+    def test_load_config_migrates_legacy_defaults_model_to_provider(self, tmp_path: Path) -> None:
+        """旧版 agents.defaults.model 应迁移到 active provider 的 model。"""
+        config_path = tmp_path / "config.json"
+        config_path.write_text(
+            json.dumps(
+                {
+                    "agents": {"defaults": {"provider": "deepseek", "model": "deepseek-chat"}},
+                    "providers": {"deepseek": {"apiKey": "sk-test"}},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        loaded = load_config(config_path)
+
+        assert not hasattr(loaded.agents.defaults, "model")
+        assert loaded.agents.defaults.provider == "deepseek"
+        assert loaded.providers.deepseek.model == "deepseek-chat"
+
     def test_load_config_rejects_legacy_channels_shape(self, tmp_path: Path) -> None:
         """旧 channels 根结构不再兼容。"""
         config_path = tmp_path / "config.json"

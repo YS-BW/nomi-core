@@ -21,7 +21,6 @@ class AgentDefaults(Base):
     """Agent 默认配置。"""
 
     workspace: str = "~/.nomi/workspace"
-    model: str = "mimo-v2.5"
     provider: str = "mimo"
     max_tokens: int = 8192
     context_window_tokens: int = 65_536

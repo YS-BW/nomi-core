@@ -6,7 +6,6 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from nomi.cli.onboard.fields import get_provider_info
 from nomi.cli.onboard.ui import console, get_questionary
 from nomi.providers.factory.model_catalog import (
     format_token_count,
@@ -140,8 +139,8 @@ def try_auto_fill_context_window(model: BaseModel, new_model_name: str) -> None:
 
 def configure_single_provider(config, provider_name: str) -> None:
     """配置单个 provider。"""
-    from nomi.cli.onboard.flow import configure_pydantic_model
     from nomi.cli.onboard.fields import get_provider_names
+    from nomi.cli.onboard.flow import configure_pydantic_model
 
     provider_config = getattr(config.providers, provider_name, None)
     if provider_config is None:
@@ -149,10 +148,14 @@ def configure_single_provider(config, provider_name: str) -> None:
         return
 
     display_name = get_provider_names().get(provider_name, provider_name)
-    default_api_base = get_provider_info().get(provider_name, (None, None, None, None))[3]
-    if default_api_base and not provider_config.api_base:
-        provider_config.api_base = default_api_base
+    skip_fields = {"api_base"} if provider_name != "custom" else set()
+    if provider_name == "mimo":
+        skip_fields.add("token_plan_api_base")
 
-    updated_provider = configure_pydantic_model(provider_config, display_name)
+    updated_provider = configure_pydantic_model(
+        provider_config,
+        display_name,
+        skip_fields=skip_fields,
+    )
     if updated_provider is not None:
         setattr(config.providers, provider_name, updated_provider)

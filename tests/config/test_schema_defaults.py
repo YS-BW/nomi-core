@@ -1,12 +1,15 @@
 """配置 schema 默认值测试。"""
 
 from nomi.config.schema import Config
+from nomi.providers.factory.resolution import resolve_active_model
 
 
-def test_default_model_is_mimo_v2_5() -> None:
-    """默认模型固定为 mimo-v2.5。"""
+def test_default_model_is_read_from_active_provider() -> None:
+    """默认模型应从 active provider 的 provider 配置读取。"""
     cfg = Config()
-    assert cfg.agents.defaults.model == "mimo-v2.5"
+    assert not hasattr(cfg.agents.defaults, "model")
+    assert cfg.providers.mimo.model == "mimo-v2.5"
+    assert resolve_active_model(cfg) == "mimo-v2.5"
 
 
 def test_default_provider_is_custom() -> None:
@@ -22,19 +25,44 @@ def test_mimo_token_plan_defaults_are_empty() -> None:
     assert cfg.providers.mimo.token_plan_api_base is None
 
 
+def test_default_provider_dump_hides_locked_api_base_fields() -> None:
+    """默认配置导出时只有 custom 暴露 apiBase。"""
+    cfg = Config()
+    data = cfg.model_dump(mode="json", by_alias=True)
+
+    assert "apiBase" in data["providers"]["custom"]
+    for provider_name, provider_config in data["providers"].items():
+        if provider_name == "custom":
+            continue
+        assert "apiBase" not in provider_config
+
+
+def test_mimo_default_dump_shape() -> None:
+    """MiMo 默认导出形态固定为常规 key、Token Plan key、模型和 headers。"""
+    cfg = Config()
+    data = cfg.model_dump(mode="json", by_alias=True)
+
+    assert data["providers"]["mimo"] == {
+        "apiKey": "",
+        "tokenPlanApiKey": "",
+        "model": "mimo-v2.5",
+        "extraHeaders": None,
+    }
+
+
 def test_reads_nomi_env_prefix(monkeypatch) -> None:
     """支持 NOMI_ 前缀读取配置。"""
-    monkeypatch.setenv("NOMI_AGENTS__DEFAULTS__MODEL", "env/model")
+    monkeypatch.setenv("NOMI_PROVIDERS__MIMO__MODEL", "env/model")
     cfg = Config()
-    assert cfg.agents.defaults.model == "env/model"
+    assert cfg.providers.mimo.model == "env/model"
 
 
 def test_ignores_legacy_nanobot_env_prefix(monkeypatch) -> None:
     """不再兼容 NANOBOT_ 前缀。"""
-    monkeypatch.delenv("NOMI_AGENTS__DEFAULTS__MODEL", raising=False)
-    monkeypatch.setenv("NANOBOT_AGENTS__DEFAULTS__MODEL", "legacy/model")
+    monkeypatch.delenv("NOMI_PROVIDERS__MIMO__MODEL", raising=False)
+    monkeypatch.setenv("NANOBOT_PROVIDERS__MIMO__MODEL", "legacy/model")
     cfg = Config()
-    assert cfg.agents.defaults.model == "mimo-v2.5"
+    assert cfg.providers.mimo.model == "mimo-v2.5"
 
 
 def test_channel_defaults() -> None:

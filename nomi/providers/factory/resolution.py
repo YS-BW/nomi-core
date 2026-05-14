@@ -5,7 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from nomi.config.schema import Config, ProviderConfig
+from nomi.providers.factory.model_catalog import list_models
 from nomi.providers.factory.registry import PROVIDERS, ProviderSpec, find_by_name
+
+_MIMO_TOKEN_PLAN_DEFAULT_API_BASE = "https://token-plan-cn.xiaomimimo.com/v1"
 
 
 @dataclass(slots=True)
@@ -33,9 +36,9 @@ def resolve_provider(config: Config, model: str | None = None) -> ProviderResolu
     异常:
         ValueError: 当强制指定了未知 provider 时抛出。
     """
-    resolved_model = model or config.agents.defaults.model
-    provider_config, provider_name = _match_provider(config, resolved_model)
+    provider_config, provider_name = _match_provider(config, model)
     spec = find_by_name(provider_name) if provider_name else None
+    resolved_model = model or resolve_active_model(config, provider_name)
     api_base = _resolve_api_base(provider_config, spec)
     return ProviderResolution(
         model=resolved_model,
@@ -49,7 +52,7 @@ def resolve_provider(config: Config, model: str | None = None) -> ProviderResolu
 
 def _match_provider(
     config: Config,
-    model: str,
+    model: str | None,
 ) -> tuple[ProviderConfig | None, str | None]:
     """按当前项目既有优先级匹配 provider。
 
@@ -63,7 +66,15 @@ def _match_provider(
     异常:
         ValueError: 当强制 provider 名称非法时抛出。
     """
-    model_lower = model.lower()
+    forced_provider = config.agents.defaults.provider
+    if model is None and forced_provider != "auto":
+        spec = find_by_name(forced_provider)
+        if spec is None:
+            raise ValueError(f"Unknown provider configured: {forced_provider}")
+        return getattr(config.providers, spec.name, None), spec.name
+
+    resolved_model = model or _resolve_auto_model(config)
+    model_lower = resolved_model.lower()
     model_prefix = model_lower.split("/", 1)[0] if "/" in model_lower else ""
     normalized_prefix = model_prefix.replace("-", "_")
 
@@ -73,7 +84,6 @@ def _match_provider(
         if spec is not None:
             return getattr(config.providers, spec.name, None), spec.name
 
-    forced_provider = config.agents.defaults.provider
     if forced_provider != "auto":
         spec = find_by_name(forced_provider)
         if spec is None:
@@ -134,6 +144,35 @@ def _match_provider(
     return None, None
 
 
+def resolve_active_model(config: Config, provider_name: str | None = None) -> str:
+    """返回当前 active provider 对应的模型名。"""
+    normalized_provider = provider_name or str(config.agents.defaults.provider or "").strip()
+    spec = find_by_name(normalized_provider) if normalized_provider else None
+    provider_config = getattr(config.providers, spec.name, None) if spec else None
+    if provider_config and provider_config.model:
+        return provider_config.model
+
+    catalog = list_models(spec.name if spec else "mimo")
+    if catalog:
+        return catalog[0].name
+    return "mimo-v2.5"
+
+
+def _resolve_auto_model(config: Config) -> str:
+    """为 auto provider 推导一个可用于路由的模型名。"""
+    forced_provider = str(config.agents.defaults.provider or "").strip()
+    if forced_provider and forced_provider != "auto":
+        return resolve_active_model(config, forced_provider)
+
+    for spec in PROVIDERS:
+        provider_config = getattr(config.providers, spec.name, None)
+        if provider_config and provider_config.model:
+            if spec.name == "mimo" and provider_config.model == "mimo-v2.5":
+                continue
+            return provider_config.model
+    return resolve_active_model(config, "mimo")
+
+
 def _resolve_api_base(
     provider_config: ProviderConfig | None,
     spec: ProviderSpec | None,
@@ -151,7 +190,9 @@ def _resolve_api_base(
         token_plan_api_base = getattr(provider_config, "token_plan_api_base", None)
         if token_plan_api_base:
             return token_plan_api_base
-    if provider_config and provider_config.api_base:
+        if getattr(provider_config, "token_plan_api_key", ""):
+            return _MIMO_TOKEN_PLAN_DEFAULT_API_BASE
+    if spec and spec.name == "custom" and provider_config and provider_config.api_base:
         return provider_config.api_base
     if spec and spec.default_api_base:
         return spec.default_api_base

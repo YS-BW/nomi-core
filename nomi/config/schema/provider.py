@@ -11,22 +11,32 @@ class ProviderConfig(Base):
     """单个 LLM provider 配置。"""
 
     api_key: str = ""
-    api_base: str | None = None
+    api_base: str | None = Field(default=None, exclude=True)
     model: str | None = None
     extra_headers: dict[str, str] | None = None
 
 
-class MimoProviderConfig(ProviderConfig):
+class CustomProviderConfig(ProviderConfig):
+    """自定义 provider 配置，允许显式编辑 API Base。"""
+
+    api_base: str | None = None
+
+
+class MimoProviderConfig(Base):
     """MiMo provider 配置，额外支持 Token Plan 专用凭证。"""
 
+    api_key: str = ""
     token_plan_api_key: str = ""
-    token_plan_api_base: str | None = None
+    model: str | None = "mimo-v2.5"
+    extra_headers: dict[str, str] | None = None
+    api_base: str | None = Field(default=None, exclude=True)
+    token_plan_api_base: str | None = Field(default=None, exclude=True)
 
 
 class ProvidersConfig(Base):
     """LLM providers 配置集合。"""
 
-    custom: ProviderConfig = Field(default_factory=ProviderConfig)
+    custom: CustomProviderConfig = Field(default_factory=CustomProviderConfig)
     deepseek: ProviderConfig = Field(default_factory=ProviderConfig)
     minimax: ProviderConfig = Field(default_factory=ProviderConfig)
     qwen: ProviderConfig = Field(default_factory=ProviderConfig)

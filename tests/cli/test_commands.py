@@ -849,7 +849,7 @@ def test_status_reports_channel_runtime_state(monkeypatch, tmp_path: Path) -> No
     config = Config()
     config.agents.defaults.workspace = str(workspace)
     config.agents.defaults.provider = "mimo"
-    config.agents.defaults.model = "mimo-v2.5"
+    config.providers.mimo.model = "mimo-v2.5"
     config.agents.defaults.timezone = "Asia/Shanghai"
     config.channel.kind = "weixin"
     config.channel.weixin.state_dir = str(weixin_dir)
@@ -966,7 +966,6 @@ def test_status_reports_remote_runtime_state(monkeypatch, tmp_path: Path) -> Non
 def test_onboard_auto_fills_context_window_via_model_catalog(monkeypatch) -> None:
     """向导应通过模型目录推荐上下文窗口。"""
     defaults = Config().agents.defaults
-    defaults.model = "mimo-v2.5"
     defaults.provider = "mimo"
 
     monkeypatch.setattr(
@@ -982,7 +981,6 @@ def test_onboard_auto_fills_context_window_via_model_catalog(monkeypatch) -> Non
 def test_onboard_does_not_auto_fill_context_window_for_unsupported_provider(monkeypatch) -> None:
     """未覆盖的 provider 不应强行写入推荐窗口。"""
     defaults = Config().agents.defaults
-    defaults.model = "llama3.2"
     defaults.provider = "ollama"
 
     monkeypatch.setattr("nomi.cli.onboard.get_model_context_limit", lambda *_args, **_kwargs: None)

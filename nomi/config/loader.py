@@ -94,6 +94,7 @@ def load_config(config_path: Path | None = None) -> Config:
         raise ValueError(f"配置文件不是合法 JSON: {path}") from exc
 
     _raise_if_removed_keys_present(data, path)
+    data = _migrate_defaults_model_to_provider(data)
 
     try:
         return _apply_instance_defaults(Config.model_validate(data))
@@ -117,6 +118,30 @@ def resolve_config_env_vars(config: Config) -> Config:
     data = config.model_dump(mode="json", by_alias=True)
     data = _resolve_env_vars(data)
     return _apply_instance_defaults(Config.model_validate(data))
+
+
+def _migrate_defaults_model_to_provider(data: object) -> object:
+    """把旧版 `agents.defaults.model` 迁移到 active provider 的 `model`。"""
+    if not isinstance(data, dict):
+        return data
+    agents = data.get("agents")
+    if not isinstance(agents, dict):
+        return data
+    defaults = agents.get("defaults")
+    if not isinstance(defaults, dict):
+        return data
+    model = defaults.pop("model", None)
+    if not isinstance(model, str) or not model.strip():
+        return data
+
+    provider_name = str(defaults.get("provider") or "mimo").strip() or "mimo"
+    providers = data.setdefault("providers", {})
+    if not isinstance(providers, dict):
+        return data
+    provider_config = providers.setdefault(provider_name, {})
+    if isinstance(provider_config, dict) and not provider_config.get("model"):
+        provider_config["model"] = model
+    return data
 
 
 def _resolve_env_vars(obj: object) -> object:

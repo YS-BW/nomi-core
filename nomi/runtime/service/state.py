@@ -15,6 +15,7 @@ from nomi.channel.registry import channel_has_login_state, get_active_channel_ki
 from nomi.config.instance import get_instance_name, get_instance_root
 from nomi.config.loader import get_config_path
 from nomi.config.paths import get_logs_dir
+from nomi.providers.factory.resolution import resolve_active_model
 
 SERVICE_LOG_FILENAME = "runtime-service.log"
 SERVICE_PID_FILENAME = "runtime-service.pid"
@@ -128,7 +129,7 @@ def write_service_state_file(
         "instance_root": str(get_instance_root()),
         "config_path": str(get_config_path()),
         "provider": config.agents.defaults.provider,
-        "model": config.agents.defaults.model,
+        "model": resolve_active_model(config),
         "scheduler_owner": "runtime",
         "remote": {
             "enabled": bool(config.remote.enabled),

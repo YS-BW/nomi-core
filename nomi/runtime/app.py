@@ -36,6 +36,7 @@ from nomi.providers.factory.registry import (
     build_provider_state,
     find_by_name,
 )
+from nomi.providers.factory.resolution import resolve_active_model
 from nomi.runtime.errors import (
     ActiveProviderNotConfiguredError,
     ModelRequiredError,
@@ -910,15 +911,34 @@ class NomiRuntime:
         provider_name: str,
         *,
         api_key=Ellipsis,
+        token_plan_api_key=Ellipsis,
         api_base=Ellipsis,
         model=Ellipsis,
         clear_api_key=Ellipsis,
+        clear_token_plan_api_key=Ellipsis,
     ) -> dict:
         """更新单个 provider 的持久化设置。"""
         spec = self._require_provider_spec(provider_name)
         config = self._load_runtime_config_from_disk()
         provider_config = getattr(config.providers, spec.name)
         requires_runtime_reload = False
+
+        if clear_token_plan_api_key is not Ellipsis and token_plan_api_key is not Ellipsis:
+            raise ProviderSettingsInvalidError(
+                "token_plan_api_key and clear_token_plan_api_key cannot be set together",
+                fields=[
+                    {
+                        "field": "token_plan_api_key",
+                        "code": "conflict",
+                        "message": "token_plan_api_key conflicts with clear_token_plan_api_key",
+                    },
+                    {
+                        "field": "clear_token_plan_api_key",
+                        "code": "conflict",
+                        "message": "clear_token_plan_api_key conflicts with token_plan_api_key",
+                    },
+                ],
+            )
 
         if clear_api_key is not Ellipsis and api_key is not Ellipsis:
             raise ProviderSettingsInvalidError(
@@ -946,6 +966,39 @@ class NomiRuntime:
             if self._is_active_provider(config, spec.name):
                 requires_runtime_reload = True
 
+        if token_plan_api_key is not Ellipsis:
+            if spec.name != "mimo":
+                raise ProviderSettingsInvalidError(
+                    f"token_plan_api_key is not supported for provider {spec.name}",
+                    fields=[
+                        {
+                            "field": "token_plan_api_key",
+                            "code": "not_supported",
+                            "message": "token_plan_api_key is only supported for provider mimo",
+                        }
+                    ],
+                )
+            provider_config.token_plan_api_key = str(token_plan_api_key or "").strip()
+            if self._is_active_provider(config, spec.name):
+                requires_runtime_reload = True
+        elif clear_token_plan_api_key is not Ellipsis and bool(clear_token_plan_api_key):
+            if spec.name != "mimo":
+                raise ProviderSettingsInvalidError(
+                    f"clear_token_plan_api_key is not supported for provider {spec.name}",
+                    fields=[
+                        {
+                            "field": "clear_token_plan_api_key",
+                            "code": "not_supported",
+                            "message": (
+                                "clear_token_plan_api_key is only supported for provider mimo"
+                            ),
+                        }
+                    ],
+                )
+            provider_config.token_plan_api_key = ""
+            if self._is_active_provider(config, spec.name):
+                requires_runtime_reload = True
+
         if api_base is not Ellipsis:
             if spec.name != "custom":
                 raise ProviderApiBaseNotEditableError(
@@ -966,7 +1019,6 @@ class NomiRuntime:
             normalized_model = self._normalize_optional_text(model)
             provider_config.model = normalized_model
             if self._is_active_provider(config, spec.name) and normalized_model is not None:
-                config.agents.defaults.model = normalized_model
                 requires_runtime_reload = True
 
         self._validate_active_provider_config(config, target_provider=spec.name)
@@ -1001,8 +1053,6 @@ class NomiRuntime:
         resolved_model = self._normalize_optional_text(model)
         if resolved_model is None:
             resolved_model = self._normalize_optional_text(provider_config.model)
-        if resolved_model is None and self._is_active_provider(config, spec.name):
-            resolved_model = self._normalize_optional_text(config.agents.defaults.model)
         if resolved_model is None:
             raise ModelRequiredError(
                 f"model is required for provider {spec.name}",
@@ -1016,7 +1066,6 @@ class NomiRuntime:
             )
 
         config.agents.defaults.provider = spec.name
-        config.agents.defaults.model = resolved_model
         provider_config.model = resolved_model
         self._validate_active_provider_config(config, target_provider=spec.name)
         self._save_runtime_config(config)
@@ -1062,7 +1111,7 @@ class NomiRuntime:
         return {
             "active": {
                 "provider": str(config.agents.defaults.provider or "").strip(),
-                "model": str(config.agents.defaults.model or "").strip(),
+                "model": resolve_active_model(config),
             },
             "provider_state": build_provider_state(config),
         }
@@ -1093,7 +1142,7 @@ class NomiRuntime:
             }
         return {
             "version": __version__,
-            "model": str(self.state.config.agents.defaults.model or ""),
+            "model": resolve_active_model(self.state.config),
             "start_time": time.time(),
             "last_usage": {},
             "context_window_tokens": 0,
@@ -1623,7 +1672,7 @@ class NomiRuntime:
             bus=bus,
             provider=provider,
             workspace=config.workspace_path,
-            model=defaults.model,
+            model=resolve_active_model(config),
             max_iterations=defaults.max_tool_iterations,
             context_window_tokens=defaults.context_window_tokens,
             web_config=config.tools.web,

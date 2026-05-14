@@ -13,6 +13,7 @@ from nomi.config.instance import (
     list_instance_contexts,
 )
 from nomi.config.loader import get_config_path, load_config, resolve_config_env_vars
+from nomi.providers.factory.resolution import resolve_active_model
 from nomi.runtime.service.state import build_runtime_status_snapshot
 from nomi.tasks.runner import TaskRunner
 
@@ -59,7 +60,7 @@ def build_status_rows(
                 "当前工作区目录状态",
             ),
             StatusRow("Provider", loaded.agents.defaults.provider, "当前默认模型提供方"),
-            StatusRow("Model", loaded.agents.defaults.model, "当前默认对话模型"),
+            StatusRow("Model", resolve_active_model(loaded), "当前默认对话模型"),
             StatusRow("Timezone", loaded.agents.defaults.timezone, "agent 默认使用的时区"),
             StatusRow(
                 "Runtime Running",

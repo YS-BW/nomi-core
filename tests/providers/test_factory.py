@@ -17,10 +17,9 @@ def test_build_provider_uses_forced_openai_backend() -> None:
             "agents": {
                 "defaults": {
                     "provider": "openai",
-                    "model": "gpt-4.1",
                 }
             },
-            "providers": {"openai": {"apiKey": "openai-test-key"}},
+            "providers": {"openai": {"apiKey": "openai-test-key", "model": "gpt-4.1"}},
         }
     )
 
@@ -33,13 +32,13 @@ def test_build_provider_uses_forced_openai_backend() -> None:
 
 
 def test_build_provider_uses_mimo_for_default_first_run() -> None:
-    """首次默认主链路应装配 mimo provider。"""
+    """首次默认主链路应装配 mimo provider，并忽略旧配置里的 apiBase 覆盖。"""
     config = Config.model_validate(
         {
             "providers": {
                 "mimo": {
                     "apiKey": "mimo-test-key",
-                    "apiBase": "https://api.xiaomimimo.com/v1",
+                    "apiBase": "https://proxy.example.com/v1",
                 }
             },
         }
@@ -75,15 +74,14 @@ def test_build_provider_uses_mimo_default_base_when_api_base_empty() -> None:
 
 
 def test_build_provider_prefers_mimo_token_plan_key_and_base() -> None:
-    """MiMo Token Plan 专用 key/base 应优先于常规 API 配置。"""
+    """MiMo Token Plan 专用 key 应优先于常规 API 配置并使用默认 Token Plan 地址。"""
     config = Config.model_validate(
         {
             "providers": {
                 "mimo": {
                     "apiKey": "regular-key",
-                    "apiBase": "https://api.xiaomimimo.com/v1",
+                    "apiBase": "https://proxy.example.com/v1",
                     "tokenPlanApiKey": "tp-token-plan-key",
-                    "tokenPlanApiBase": "https://token-plan-cn.xiaomimimo.com/v1",
                 }
             },
         }
@@ -106,7 +104,6 @@ def test_build_provider_accepts_mimo_token_plan_without_regular_key() -> None:
             "providers": {
                 "mimo": {
                     "tokenPlanApiKey": "tp-token-plan-key",
-                    "tokenPlanApiBase": "https://token-plan-sgp.xiaomimimo.com/v1",
                 }
             },
         }
@@ -116,18 +113,17 @@ def test_build_provider_accepts_mimo_token_plan_without_regular_key() -> None:
         provider = build_provider(config)
 
     assert provider.api_key == "tp-token-plan-key"
-    assert provider._effective_base == "https://token-plan-sgp.xiaomimimo.com/v1"
+    assert provider._effective_base == "https://token-plan-cn.xiaomimimo.com/v1"
 
 
 def test_build_provider_applies_default_generation_settings() -> None:
     """provider 应继承配置里的默认 generation 参数。"""
     config = Config.model_validate(
         {
-            "providers": {"mimo": {"apiKey": "mimo-test-key"}},
+            "providers": {"mimo": {"apiKey": "mimo-test-key", "model": "mimo-v2.5"}},
             "agents": {
                 "defaults": {
                     "provider": "mimo",
-                    "model": "mimo-v2.5",
                     "temperature": 0.6,
                     "max_tokens": 4096,
                     "reasoning_effort": "medium",
@@ -148,15 +144,10 @@ def test_build_provider_uses_deepseek_backend_with_default_base() -> None:
     """DeepSeek provider 只填 apiKey 时也应落到官方默认地址。"""
     config = Config.model_validate(
         {
-            "providers": {
-                "deepseek": {
-                    "apiKey": "deepseek-test-key",
-                }
-            },
+            "providers": {"deepseek": {"apiKey": "deepseek-test-key", "model": "deepseek-v4-flash"}},
             "agents": {
                 "defaults": {
                     "provider": "deepseek",
-                    "model": "deepseek-v4-flash",
                 }
             },
         }
@@ -176,15 +167,10 @@ def test_build_provider_uses_qwen_backend_with_default_base() -> None:
     """Qwen provider 只填 apiKey 时也应落到官方默认地址。"""
     config = Config.model_validate(
         {
-            "providers": {
-                "qwen": {
-                    "apiKey": "dashscope-test-key",
-                }
-            },
+            "providers": {"qwen": {"apiKey": "dashscope-test-key", "model": "qwen-max"}},
             "agents": {
                 "defaults": {
                     "provider": "qwen",
-                    "model": "qwen-max",
                 }
             },
         }
@@ -204,15 +190,10 @@ def test_build_provider_uses_zhipu_backend_with_default_base() -> None:
     """Zhipu provider 只填 apiKey 时也应落到官方默认地址。"""
     config = Config.model_validate(
         {
-            "providers": {
-                "zhipu": {
-                    "apiKey": "zhipu-test-key",
-                }
-            },
+            "providers": {"zhipu": {"apiKey": "zhipu-test-key", "model": "glm-4.5"}},
             "agents": {
                 "defaults": {
                     "provider": "zhipu",
-                    "model": "glm-4.5",
                 }
             },
         }
@@ -232,15 +213,10 @@ def test_build_provider_uses_minimax_anthropic_backend_with_default_base() -> No
     """MiniMax provider 只填 apiKey 时应复用 Anthropic backend 并补默认地址。"""
     config = Config.model_validate(
         {
-            "providers": {
-                "minimax": {
-                    "apiKey": "minimax-test-key",
-                }
-            },
+            "providers": {"minimax": {"apiKey": "minimax-test-key", "model": "MiniMax-M2.7"}},
             "agents": {
                 "defaults": {
                     "provider": "minimax",
-                    "model": "MiniMax-M2.7",
                 }
             },
         }
@@ -258,15 +234,10 @@ def test_build_provider_uses_moonshot_backend_with_default_base() -> None:
     """Moonshot provider 只填 apiKey 时应落到专用 backend 并补默认地址。"""
     config = Config.model_validate(
         {
-            "providers": {
-                "moonshot": {
-                    "apiKey": "moonshot-test-key",
-                }
-            },
+            "providers": {"moonshot": {"apiKey": "moonshot-test-key", "model": "kimi-k2.6"}},
             "agents": {
                 "defaults": {
                     "provider": "moonshot",
-                    "model": "kimi-k2.6",
                 }
             },
         }
@@ -286,15 +257,10 @@ def test_build_provider_uses_siliconflow_backend_with_default_base() -> None:
     """SiliconFlow provider 只填 apiKey 时应落到专用 backend 并补默认地址。"""
     config = Config.model_validate(
         {
-            "providers": {
-                "siliconflow": {
-                    "apiKey": "siliconflow-test-key",
-                }
-            },
+            "providers": {"siliconflow": {"apiKey": "siliconflow-test-key", "model": "Pro/zai-org/GLM-4.7"}},
             "agents": {
                 "defaults": {
                     "provider": "siliconflow",
-                    "model": "Pro/zai-org/GLM-4.7",
                 }
             },
         }
@@ -323,7 +289,7 @@ def test_build_provider_rejects_missing_api_key_for_remote_provider() -> None:
     """远端 openai 兼容 provider 缺少 key 时应报错。"""
     config = Config()
     config.agents.defaults.provider = "openai"
-    config.agents.defaults.model = "gpt-4o"
+    config.providers.openai.model = "gpt-4o"
 
     with pytest.raises(ValueError, match="No API key configured for provider 'openai'"):
         build_provider(config)
@@ -336,7 +302,6 @@ def test_build_provider_rejects_missing_api_key_for_deepseek() -> None:
             "agents": {
                 "defaults": {
                     "provider": "deepseek",
-                    "model": "deepseek-v4-flash",
                 }
             }
         }
@@ -353,7 +318,6 @@ def test_build_provider_rejects_missing_api_key_for_qwen() -> None:
             "agents": {
                 "defaults": {
                     "provider": "qwen",
-                    "model": "qwen-max",
                 }
             }
         }
@@ -370,7 +334,6 @@ def test_build_provider_rejects_missing_api_key_for_zhipu() -> None:
             "agents": {
                 "defaults": {
                     "provider": "zhipu",
-                    "model": "glm-4.5",
                 }
             }
         }
@@ -387,7 +350,6 @@ def test_build_provider_rejects_missing_api_key_for_moonshot() -> None:
             "agents": {
                 "defaults": {
                     "provider": "moonshot",
-                    "model": "kimi-k2.6",
                 }
             }
         }
@@ -404,7 +366,6 @@ def test_build_provider_rejects_missing_api_key_for_siliconflow() -> None:
             "agents": {
                 "defaults": {
                     "provider": "siliconflow",
-                    "model": "Pro/zai-org/GLM-4.7",
                 }
             }
         }
@@ -421,7 +382,6 @@ def test_build_provider_rejects_missing_api_key_for_minimax() -> None:
             "agents": {
                 "defaults": {
                     "provider": "minimax",
-                    "model": "MiniMax-M2.7",
                 }
             }
         }

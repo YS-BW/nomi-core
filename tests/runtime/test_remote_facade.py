@@ -492,7 +492,7 @@ def test_runtime_provider_settings_persist_to_config(
     config = Config()
     config.agents.defaults.workspace = str(tmp_path / "workspace")
     config.agents.defaults.provider = "deepseek"
-    config.agents.defaults.model = "deepseek-chat"
+    config.providers.deepseek.model = "deepseek-chat"
     config_path = tmp_path / "config.json"
     save_config(config, config_path)
     monkeypatch.setattr("nomi.runtime.app.get_config_path", lambda: config_path)
@@ -581,6 +581,41 @@ def test_runtime_update_provider_can_clear_api_key(
     assert saved.providers.custom.api_key == ""
 
 
+def test_runtime_update_provider_can_update_mimo_token_plan_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """update_provider 应支持 MiMo Token Plan key 的写入和清空。"""
+    config = Config()
+    config.agents.defaults.provider = "mimo"
+    config.agents.defaults.workspace = str(tmp_path / "workspace")
+    config_path = tmp_path / "config.json"
+    save_config(config, config_path)
+    monkeypatch.setattr("nomi.runtime.app.get_config_path", lambda: config_path)
+
+    runtime = NomiRuntime.from_config(
+        config,
+        provider_builder=lambda _config: object(),
+        agent_loop_factory=lambda **kwargs: _ReloadLoopStub(
+            workspace=kwargs["workspace"],
+            provider=kwargs["provider"],
+            model=kwargs["model"],
+        ),
+    )
+
+    result = runtime.update_provider("mimo", token_plan_api_key="tp-test")
+    saved = Config.model_validate_json(config_path.read_text(encoding="utf-8"))
+    assert result["settings"]["token_plan_api_key"] == "tp-test"
+    assert result["settings"]["token_plan_api_key_set"] is True
+    assert result["requires_runtime_reload"] is True
+    assert saved.providers.mimo.token_plan_api_key == "tp-test"
+
+    cleared = runtime.update_provider("mimo", clear_token_plan_api_key=True)
+    saved = Config.model_validate_json(config_path.read_text(encoding="utf-8"))
+    assert cleared["settings"]["token_plan_api_key_set"] is False
+    assert saved.providers.mimo.token_plan_api_key == ""
+
+
 def test_runtime_sidebar_serializes_task_target_channels(tmp_path: Path) -> None:
     config = Config()
     config.agents.defaults.workspace = str(tmp_path)
@@ -627,7 +662,7 @@ async def test_runtime_set_active_provider_and_reload_runtime(
     config = Config()
     config.agents.defaults.workspace = str(tmp_path / "workspace")
     config.agents.defaults.provider = "deepseek"
-    config.agents.defaults.model = "deepseek-chat"
+    config.providers.deepseek.model = "deepseek-chat"
     config.providers.minimax.api_key = "sk-minimax"
     config.providers.minimax.model = "MiniMax-M2.7"
     config_path = tmp_path / "config.json"
@@ -658,7 +693,7 @@ async def test_runtime_set_active_provider_and_reload_runtime(
     assert changed["active"] == {"provider": "minimax", "model": "MiniMax-M2.7"}
     assert reloaded["active"] == {"provider": "minimax", "model": "MiniMax-M2.7"}
     assert runtime.state.config.agents.defaults.provider == "minimax"
-    assert runtime.state.config.agents.defaults.model == "MiniMax-M2.7"
+    assert runtime.state.config.providers.minimax.model == "MiniMax-M2.7"
     assert created_loops[-1].model == "MiniMax-M2.7"
     assert created_loops[-1].reminder_consumers == {"remote", "weixin"}
 
