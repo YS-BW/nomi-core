@@ -19,9 +19,9 @@ class _InstanceTool(Tool):
 @tool_parameters(
     tool_parameters_schema(
         required=[],
-        public_url=StringSchema(
-            "当前 instance 对外可访问的 HTTP URL，例如 http://127.0.0.1:8765",
-            nullable=True,
+        description=(
+            "生成当前 Nomi instance 的一次性邀请码。"
+            "不要传参数；工具会自动使用当前实例 remote 配置里的 host/port。"
         ),
     )
 )
@@ -45,8 +45,7 @@ class InstanceInviteCodeTool(_InstanceTool):
 
     async def execute(self, public_url: str | None = None, **kwargs: Any) -> str:
         """生成邀请码。"""
-        del kwargs
-        return self._runtime.build_instance_invite_code(public_url)
+        return self._runtime.build_instance_invite_code(public_url or kwargs.get("public_url"))
 
 
 @tool_parameters(

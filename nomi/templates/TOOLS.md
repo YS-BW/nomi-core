@@ -83,7 +83,8 @@
 ## 9. `instance_*`
 
 - 实例之间加好友、确认关系、备注和聊天时，优先使用 instance 工具，不要用 `exec` 拼 CLI 命令
-- 生成当前实例一次性邀请码用 `instance_invite_code(public_url=...)`；每次生成都会刷新旧邀请码
+- 生成当前实例一次性邀请码用 `instance_invite_code()`，不要填写 `public_url`；工具会自动使用当前实例 remote 配置里的 host/port，每次生成都会刷新旧邀请码
+- 只有用户明确给了公网可访问地址时，才让用户改用 CLI：`nomi instance invite-code --url <public-url>`；不要自己猜端口或把其它实例端口写进邀请码
 - 用对方邀请码发起好友申请用 `instance_invite(invite_code=..., requested_permission=...)`
 - 不要再用 URL/token 加好友；remote token 只属于 desktop/remote API，不代表好友身份
 - 查看关系列表用 `instance_relation_list()`

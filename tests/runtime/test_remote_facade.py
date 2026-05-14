@@ -527,6 +527,23 @@ def test_runtime_instance_session_queries_format_messages(tmp_path: Path) -> Non
     assert messages["messages"][0]["label"] == "我发给对方"
 
 
+def test_runtime_invite_code_rejects_wrong_loopback_override(tmp_path: Path) -> None:
+    """模型不能把同机其它实例端口写进当前实例的邀请码。"""
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    config.remote.host = "127.0.0.1"
+    config.remote.port = 8766
+    loop_stub = _LoopStub(config.workspace_path)
+    runtime = NomiRuntime.from_config(
+        config,
+        provider_builder=lambda _config: object(),
+        agent_loop_factory=lambda **_kwargs: loop_stub,
+    )
+
+    with pytest.raises(ValueError, match="does not match this instance remote port"):
+        runtime.build_instance_invite_code("http://127.0.0.1:8765")
+
+
 @pytest.mark.asyncio
 async def test_runtime_invite_code_keeps_local_key_and_uses_remote_name_as_note(
     tmp_path: Path,

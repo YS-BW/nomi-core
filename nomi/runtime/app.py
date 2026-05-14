@@ -12,6 +12,7 @@ from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
 
 from loguru import logger
 
@@ -658,8 +659,24 @@ class NomiRuntime:
         """返回当前实例对外 HTTP URL。"""
         url = str(public_url or "").strip().rstrip("/")
         if url:
+            self._validate_instance_public_url_override(url)
             return url
         return f"http://{self.state.config.remote.host}:{self.state.config.remote.port}"
+
+    def _validate_instance_public_url_override(self, url: str) -> None:
+        """防止模型把同机其它实例端口写进当前实例邀请码。"""
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
+        if host not in {"127.0.0.1", "localhost", "::1"}:
+            return
+        if parsed.port is None:
+            return
+        expected_port = int(self.state.config.remote.port)
+        if parsed.port != expected_port:
+            raise ValueError(
+                "public_url points to a loopback port that does not match this instance "
+                f"remote port: got {parsed.port}, expected {expected_port}"
+            )
 
     def _require_outgoing_response_token(self, key: str, token: str | None):
         """校验 pending outgoing 申请的 response token。"""

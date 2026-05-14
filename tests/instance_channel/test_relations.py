@@ -234,9 +234,9 @@ async def test_instance_tools_call_runtime() -> None:
 
     runtime = RuntimeStub()
 
-    assert "nomi://instance-invite" in await InstanceInviteCodeTool(runtime).execute(
-        public_url="http://127.0.0.1:8765"
-    )
+    tool = InstanceInviteCodeTool(runtime)
+    assert "public_url" not in tool.parameters["properties"]
+    assert "nomi://instance-invite" in await tool.execute()
     assert "已向" in await InstanceInviteTool(runtime).execute(
         invite_code=(
             "nomi://instance-invite?v=1&key=xmy&url=http%3A%2F%2F127.0.0.1%3A8766"
@@ -263,7 +263,7 @@ async def test_instance_tools_call_runtime() -> None:
     assert "最近 instance 会话" in await InstanceSessionListTool(runtime).execute(limit=5)
     assert "我发给对方" in await InstanceSessionGetTool(runtime).execute(key="xmy", limit=5)
     assert calls == [
-        ("invite_code", "http://127.0.0.1:8765"),
+        ("invite_code", None),
         (
             "invite",
             "nomi://instance-invite?v=1&key=xmy&url=http%3A%2F%2F127.0.0.1%3A8766&invite_id=inv-1&secret=s",
