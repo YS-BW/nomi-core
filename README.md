@@ -122,7 +122,7 @@ nomi onboard --instance team-a
 
 ### 2. 填入模型配置
 
-当前默认模型是小米 `mimo-v2.5`，默认 provider 是 `custom`，也就是直接走 OpenAI 兼容接口。
+当前默认 provider 是 `mimo`，默认模型从 `providers.mimo.model` 读取，基础地址由 provider 注册表锁定。
 
 最小可用配置可以是：
 
@@ -131,15 +131,16 @@ nomi onboard --instance team-a
   "agents": {
     "defaults": {
       "workspace": "~/.nomi/workspace",
-      "provider": "custom",
-      "model": "mimo-v2.5",
+      "provider": "mimo",
       "timezone": "Asia/Shanghai"
     }
   },
   "providers": {
-    "custom": {
+    "mimo": {
       "apiKey": "你的 key",
-      "apiBase": "https://token-plan-cn.xiaomimimo.com/v1"
+      "tokenPlanApiKey": "",
+      "model": "mimo-v2.5",
+      "extraHeaders": null
     }
   },
   "tools": {

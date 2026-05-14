@@ -42,10 +42,12 @@ Nomi 的 provider 子系统，简单理解就是“模型接入层” 🤖
 ```json
 {
   "apiKey": "",
-  "apiBase": null,
+  "model": null,
   "extraHeaders": null
 }
 ```
+
+`custom` 是唯一可编辑 `apiBase` 的 provider；其它 provider 的基础地址由注册表默认值锁定，配置文件里不再写 `apiBase`。
 
 ---
 
@@ -234,19 +236,19 @@ DeepSeek 现在不再建议通过 `custom` 伪装接入。
 {
   "agents": {
     "defaults": {
-      "provider": "deepseek",
-      "model": "deepseek-v4-flash"
+      "provider": "deepseek"
     }
   },
   "providers": {
     "deepseek": {
-      "apiKey": "你的 key"
+      "apiKey": "你的 key",
+      "model": "deepseek-v4-flash"
     }
   }
 }
 ```
 
-如果你填了 `apiBase`，会覆盖默认官方地址；否则直接走官方默认地址。
+DeepSeek 的基础地址由 provider 注册表锁定为官方默认地址，配置文件里不再写 `apiBase`。
 
 之所以单独做 `deepseek` backend，而不是继续复用 generic `custom`，是因为 DeepSeek 在 thinking mode 下的多轮 tool-call transcript 回放语义和普通 OpenAI 兼容端点不同，尤其是：
 
@@ -286,19 +288,19 @@ DeepSeek 现在不再建议通过 `custom` 伪装接入。
 {
   "agents": {
     "defaults": {
-      "provider": "qwen",
-      "model": "qwen-max"
+      "provider": "qwen"
     }
   },
   "providers": {
     "qwen": {
-      "apiKey": "你的 key"
+      "apiKey": "你的 key",
+      "model": "qwen-max"
     }
   }
 }
 ```
 
-如果你填了 `apiBase`，会覆盖默认官方地址；否则直接走官方默认地址。
+Qwen 的基础地址由 provider 注册表锁定为官方默认地址，配置文件里不再写 `apiBase`。
 
 当前不建议再用 `custom + apiBase` 伪装配置 Qwen。原因不是“不能用”，而是 Qwen 有专门的 thinking 请求参数，需要通过 `QwenProvider` 统一处理：
 
@@ -336,13 +338,13 @@ DeepSeek 现在不再建议通过 `custom` 伪装接入。
 {
   "agents": {
     "defaults": {
-      "provider": "zhipu",
-      "model": "glm-4.5"
+      "provider": "zhipu"
     }
   },
   "providers": {
     "zhipu": {
-      "apiKey": "你的 key"
+      "apiKey": "你的 key",
+      "model": "glm-4.5"
     }
   }
 }
@@ -370,19 +372,19 @@ MiniMax 当前推荐通过独立 `minimax` provider 接入，而不是继续走 
 {
   "agents": {
     "defaults": {
-      "provider": "minimax",
-      "model": "MiniMax-M2.7"
+      "provider": "minimax"
     }
   },
   "providers": {
     "minimax": {
-      "apiKey": "你的 key"
+      "apiKey": "你的 key",
+      "model": "MiniMax-M2.7"
     }
   }
 }
 ```
 
-如果你填了 `apiBase`，会覆盖默认官方地址；否则直接走官方默认地址。
+MiniMax 的基础地址由 provider 注册表锁定为官方默认地址，配置文件里不再写 `apiBase`。
 
 当前不建议再用 `custom + apiBase` 伪装配置 MiniMax。原因不是“不能用”，而是当前官方推荐的 tool calling / interleaved thinking 路径更接近 Anthropic block 语义，复用现有 `AnthropicProvider` 更稳。
 
@@ -416,19 +418,19 @@ Moonshot 当前继续走 OpenAI Chat Completions 兼容接口，但也不再只�
 {
   "agents": {
     "defaults": {
-      "provider": "moonshot",
-      "model": "kimi-k2.6"
+      "provider": "moonshot"
     }
   },
   "providers": {
     "moonshot": {
-      "apiKey": "你的 key"
+      "apiKey": "你的 key",
+      "model": "kimi-k2.6"
     }
   }
 }
 ```
 
-如果你填了 `apiBase`，会覆盖默认官方地址；否则直接走官方默认地址。
+Kimi 的基础地址由 provider 注册表锁定为官方默认地址，配置文件里不再写 `apiBase`。
 
 当前不建议再把 Kimi 只当成“普通 OpenAI 兼容端点”理解。原因不是响应结构完全不同，而是它有几条需要 provider 层单独收口的官方约束：
 
@@ -465,19 +467,19 @@ SiliconFlow 当前继续走 OpenAI Chat Completions 兼容接口，但也不再�
 {
   "agents": {
     "defaults": {
-      "provider": "siliconflow",
-      "model": "Pro/zai-org/GLM-4.7"
+      "provider": "siliconflow"
     }
   },
   "providers": {
     "siliconflow": {
-      "apiKey": "你的 key"
+      "apiKey": "你的 key",
+      "model": "Pro/zai-org/GLM-4.7"
     }
   }
 }
 ```
 
-如果你填了 `apiBase`，会覆盖默认官方地址；否则直接走官方默认地址。
+SiliconFlow 的基础地址由 provider 注册表锁定为官方默认地址，配置文件里不再写 `apiBase`。
 
 当前不建议再把 SiliconFlow 只当成“普通 OpenAI 兼容网关”理解。原因不是主响应结构不同，而是它有一组需要 provider 层统一收口的官方 thinking 参数：
 
@@ -498,7 +500,7 @@ SiliconFlow 当前继续走 OpenAI Chat Completions 兼容接口，但也不再�
 
 ## Mimo 默认配置
 
-当前推荐的小米 Mimo 配置方式是直接使用 `mimo` provider。常规 API 只需要填写 `apiKey`，`apiBase` 为空时会回退到默认地址：
+当前推荐的小米 Mimo 配置方式是直接使用 `mimo` provider。常规 API 只需要填写 `apiKey`，基础地址由 provider 注册表锁定：
 
 - 常规 OpenAI 兼容地址：`https://api.xiaomimimo.com/v1`
 - Anthropic 兼容地址：`https://api.xiaomimimo.com/anthropic`
@@ -509,41 +511,40 @@ SiliconFlow 当前继续走 OpenAI Chat Completions 兼容接口，但也不再�
 {
   "agents": {
     "defaults": {
-      "provider": "mimo",
-      "model": "mimo-v2.5"
+      "provider": "mimo"
     }
   },
   "providers": {
     "mimo": {
       "apiKey": "你的常规 API key",
-      "apiBase": null
+      "tokenPlanApiKey": "",
+      "model": "mimo-v2.5",
+      "extraHeaders": null
     }
   }
 }
 ```
 
-如果使用 Mimo Token Plan，不要改成 `custom` provider，也不要覆盖常规 `apiBase`。直接填写 `mimo` 下的 Token Plan 专用字段：
+如果使用 Mimo Token Plan，不要改成 `custom` provider，也不要覆盖常规 `apiBase`。直接填写 `mimo` 下的 Token Plan 专用 key：
 
 ```json
 {
   "providers": {
     "mimo": {
       "apiKey": "",
-      "apiBase": null,
       "tokenPlanApiKey": "tp-xxxxx",
-      "tokenPlanApiBase": "https://token-plan-cn.xiaomimimo.com/v1"
+      "model": "mimo-v2.5",
+      "extraHeaders": null
     }
   }
 }
 ```
 
-Token Plan 的 base URL 以订阅页面显示为准，官方当前文档列出的 OpenAI 兼容地址包括：
+Token Plan 的默认 base URL 当前固定为：
 
 - `https://token-plan-cn.xiaomimimo.com/v1`
-- `https://token-plan-sgp.xiaomimimo.com/v1`
-- `https://token-plan-ams.xiaomimimo.com/v1`
 
-当 `tokenPlanApiKey` 存在时，`mimo` backend 会优先使用 Token Plan key；当 `tokenPlanApiBase` 存在时，会优先使用 Token Plan base URL。
+当 `tokenPlanApiKey` 存在时，`mimo` backend 会优先使用 Token Plan key，并自动切换到 Token Plan 默认 base URL。`mimo` 配置不再暴露 `apiBase` 或 `tokenPlanApiBase`，避免前端和用户误改 locked provider 的基础地址。
 
 Mimo 官方文档还明确要求：在 thinking 模式开启且多轮工具调用历史里存在 assistant `reasoning_content` 时，后续轮次必须完整回传相关 `reasoning_content`，否则可能返回 400。当前 `nomi-core` 会保存并回放 provider 返回的 `reasoning_content`，不要在 session 或 transcript 清洗逻辑里丢掉该字段。
 
