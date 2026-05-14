@@ -2,7 +2,7 @@
 
 from .agent import AgentDefaults, AgentsConfig, DreamConfig
 from .channel import ChannelConfig, FeishuChannelConfig, WeixinChannelConfig
-from .provider import ProviderConfig, ProvidersConfig
+from .provider import MimoProviderConfig, ProviderConfig, ProvidersConfig
 from .remote import RemoteConfig
 from .skills import SkillsConfig
 from .root import Config
@@ -18,6 +18,7 @@ __all__ = [
     "ExecToolConfig",
     "FeishuChannelConfig",
     "MCPServerConfig",
+    "MimoProviderConfig",
     "ProviderConfig",
     "ProvidersConfig",
     "RemoteConfig",

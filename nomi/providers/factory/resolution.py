@@ -147,6 +147,10 @@ def _resolve_api_base(
     返回:
         用户显式配置的 api_base，或根据 spec 推断出的默认地址。
     """
+    if spec and spec.name == "mimo" and provider_config:
+        token_plan_api_base = getattr(provider_config, "token_plan_api_base", None)
+        if token_plan_api_base:
+            return token_plan_api_base
     if provider_config and provider_config.api_base:
         return provider_config.api_base
     if spec and spec.default_api_base:

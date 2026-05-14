@@ -15,6 +15,13 @@ def test_default_provider_is_custom() -> None:
     assert cfg.agents.defaults.provider == "mimo"
 
 
+def test_mimo_token_plan_defaults_are_empty() -> None:
+    """MiMo Token Plan 默认不启用，需显式填写专用 key。"""
+    cfg = Config()
+    assert cfg.providers.mimo.token_plan_api_key == ""
+    assert cfg.providers.mimo.token_plan_api_base is None
+
+
 def test_reads_nomi_env_prefix(monkeypatch) -> None:
     """支持 NOMI_ 前缀读取配置。"""
     monkeypatch.setenv("NOMI_AGENTS__DEFAULTS__MODEL", "env/model")

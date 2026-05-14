@@ -55,6 +55,70 @@ def test_build_provider_uses_mimo_for_default_first_run() -> None:
     assert provider._effective_base == "https://api.xiaomimimo.com/v1"
 
 
+def test_build_provider_uses_mimo_default_base_when_api_base_empty() -> None:
+    """MiMo provider 只填 apiKey 时应落到常规 API 默认地址。"""
+    config = Config.model_validate(
+        {
+            "providers": {
+                "mimo": {
+                    "apiKey": "mimo-test-key",
+                }
+            },
+        }
+    )
+
+    with patch("nomi.providers.backends.openai_compat.AsyncOpenAI"):
+        provider = build_provider(config)
+
+    assert provider.__class__.__name__ == "MiMoProvider"
+    assert provider._effective_base == "https://api.xiaomimimo.com/v1"
+
+
+def test_build_provider_prefers_mimo_token_plan_key_and_base() -> None:
+    """MiMo Token Plan 专用 key/base 应优先于常规 API 配置。"""
+    config = Config.model_validate(
+        {
+            "providers": {
+                "mimo": {
+                    "apiKey": "regular-key",
+                    "apiBase": "https://api.xiaomimimo.com/v1",
+                    "tokenPlanApiKey": "tp-token-plan-key",
+                    "tokenPlanApiBase": "https://token-plan-cn.xiaomimimo.com/v1",
+                }
+            },
+        }
+    )
+
+    with patch("nomi.providers.backends.openai_compat.AsyncOpenAI") as mock_client:
+        provider = build_provider(config)
+
+    assert provider.__class__.__name__ == "MiMoProvider"
+    assert provider.api_key == "tp-token-plan-key"
+    assert provider._effective_base == "https://token-plan-cn.xiaomimimo.com/v1"
+    assert mock_client.call_args.kwargs["api_key"] == "tp-token-plan-key"
+    assert str(mock_client.call_args.kwargs["base_url"]) == "https://token-plan-cn.xiaomimimo.com/v1"
+
+
+def test_build_provider_accepts_mimo_token_plan_without_regular_key() -> None:
+    """只配置 MiMo Token Plan key 时也应能装配 provider。"""
+    config = Config.model_validate(
+        {
+            "providers": {
+                "mimo": {
+                    "tokenPlanApiKey": "tp-token-plan-key",
+                    "tokenPlanApiBase": "https://token-plan-sgp.xiaomimimo.com/v1",
+                }
+            },
+        }
+    )
+
+    with patch("nomi.providers.backends.openai_compat.AsyncOpenAI"):
+        provider = build_provider(config)
+
+    assert provider.api_key == "tp-token-plan-key"
+    assert provider._effective_base == "https://token-plan-sgp.xiaomimimo.com/v1"
+
+
 def test_build_provider_applies_default_generation_settings() -> None:
     """provider 应继承配置里的默认 generation 参数。"""
     config = Config.model_validate(

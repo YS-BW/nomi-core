@@ -498,26 +498,54 @@ SiliconFlow 当前继续走 OpenAI Chat Completions 兼容接口，但也不再�
 
 ## Mimo 默认配置
 
-当前默认推荐的小米 Mimo 配置方式就是：
+当前推荐的小米 Mimo 配置方式是直接使用 `mimo` provider。常规 API 只需要填写 `apiKey`，`apiBase` 为空时会回退到默认地址：
+
+- 常规 OpenAI 兼容地址：`https://api.xiaomimimo.com/v1`
+- Anthropic 兼容地址：`https://api.xiaomimimo.com/anthropic`
+
+`nomi-core` 当前 `mimo` backend 使用 OpenAI Chat Completions 兼容接口，默认模型仍是 `mimo-v2.5`。
 
 ```json
 {
   "agents": {
     "defaults": {
-      "provider": "custom",
+      "provider": "mimo",
       "model": "mimo-v2.5"
     }
   },
   "providers": {
-    "custom": {
-      "apiKey": "你的 key",
-      "apiBase": "https://token-plan-cn.xiaomimimo.com/v1"
+    "mimo": {
+      "apiKey": "你的常规 API key",
+      "apiBase": null
     }
   }
 }
 ```
 
-这也是你本机当前 `~/.nomi/config.json` 的实际结构。
+如果使用 Mimo Token Plan，不要改成 `custom` provider，也不要覆盖常规 `apiBase`。直接填写 `mimo` 下的 Token Plan 专用字段：
+
+```json
+{
+  "providers": {
+    "mimo": {
+      "apiKey": "",
+      "apiBase": null,
+      "tokenPlanApiKey": "tp-xxxxx",
+      "tokenPlanApiBase": "https://token-plan-cn.xiaomimimo.com/v1"
+    }
+  }
+}
+```
+
+Token Plan 的 base URL 以订阅页面显示为准，官方当前文档列出的 OpenAI 兼容地址包括：
+
+- `https://token-plan-cn.xiaomimimo.com/v1`
+- `https://token-plan-sgp.xiaomimimo.com/v1`
+- `https://token-plan-ams.xiaomimimo.com/v1`
+
+当 `tokenPlanApiKey` 存在时，`mimo` backend 会优先使用 Token Plan key；当 `tokenPlanApiBase` 存在时，会优先使用 Token Plan base URL。
+
+Mimo 官方文档还明确要求：在 thinking 模式开启且多轮工具调用历史里存在 assistant `reasoning_content` 时，后续轮次必须完整回传相关 `reasoning_content`，否则可能返回 400。当前 `nomi-core` 会保存并回放 provider 返回的 `reasoning_content`，不要在 session 或 transcript 清洗逻辑里丢掉该字段。
 
 ---
 

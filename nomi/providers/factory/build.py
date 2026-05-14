@@ -30,7 +30,12 @@ def build_provider(config: Config) -> LLMProvider:
         if not provider_config or not provider_config.api_key or not provider_config.api_base:
             raise ValueError("Azure OpenAI requires api_key and api_base in config.")
     elif backend == "mimo":
-        if not provider_config or not provider_config.api_key:
+        mimo_api_key = (
+            (getattr(provider_config, "token_plan_api_key", "") or provider_config.api_key)
+            if provider_config
+            else ""
+        )
+        if not mimo_api_key:
             raise ValueError("No API key configured for provider 'mimo'.")
     elif backend == "deepseek":
         if not provider_config or not provider_config.api_key:
@@ -76,8 +81,9 @@ def build_provider(config: Config) -> LLMProvider:
     elif backend == "mimo":
         from nomi.providers.backends.mimo import MiMoProvider
 
+        mimo_api_key = getattr(provider_config, "token_plan_api_key", "") or provider_config.api_key
         provider = MiMoProvider(
-            api_key=provider_config.api_key if provider_config else None,
+            api_key=mimo_api_key if provider_config else None,
             api_base=resolution.api_base,
             default_model=model,
             extra_headers=provider_config.extra_headers if provider_config else None,

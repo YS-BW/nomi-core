@@ -16,6 +16,13 @@ class ProviderConfig(Base):
     extra_headers: dict[str, str] | None = None
 
 
+class MimoProviderConfig(ProviderConfig):
+    """MiMo provider 配置，额外支持 Token Plan 专用凭证。"""
+
+    token_plan_api_key: str = ""
+    token_plan_api_base: str | None = None
+
+
 class ProvidersConfig(Base):
     """LLM providers 配置集合。"""
 
@@ -23,7 +30,7 @@ class ProvidersConfig(Base):
     deepseek: ProviderConfig = Field(default_factory=ProviderConfig)
     minimax: ProviderConfig = Field(default_factory=ProviderConfig)
     qwen: ProviderConfig = Field(default_factory=ProviderConfig)
-    mimo: ProviderConfig = Field(default_factory=ProviderConfig)
+    mimo: MimoProviderConfig = Field(default_factory=MimoProviderConfig)
     azure_openai: ProviderConfig = Field(default_factory=ProviderConfig)
     anthropic: ProviderConfig = Field(default_factory=ProviderConfig)
     openai: ProviderConfig = Field(default_factory=ProviderConfig)
