@@ -14,12 +14,11 @@ def test_sync_workspace_templates_uses_workspace_subdir(tmp_path: Path) -> None:
     assert "AGENTS.md" in added
     assert "SOUL.md" in added
     assert "USER.md" in added
-    assert "TOOLS.md" in added
     assert "memory/MEMORY.md" in added
     assert "memory/history.jsonl" in added
     assert (workspace / "AGENTS.md").is_file()
     assert (workspace / "SOUL.md").is_file()
     assert (workspace / "USER.md").is_file()
-    assert (workspace / "TOOLS.md").is_file()
+    assert not (workspace / "TOOLS.md").exists()
     assert (workspace / "memory" / "MEMORY.md").is_file()
     assert (workspace / "memory" / "history.jsonl").is_file()

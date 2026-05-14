@@ -14,7 +14,7 @@
 - Shell / 程序执行：`exec`
 - Web 搜索与抓取：`web_search`、`web_fetch`
 - 自动任务：`task_create_after`、`task_create_at`、`task_create_daily`、`task_create_every`、`task_list`、`task_get`、`task_delete`、`task_enable`、`task_disable`、`task_update_instruction`、`task_reschedule_after`、`task_reschedule_at`、`task_reschedule_daily`、`task_reschedule_every`
-- 实例关系：`instance_invite_code`、`instance_invite`、`instance_relation_list`、`instance_relation_accept`、`instance_relation_reject`、`instance_relation_rename`、`instance_send_message`
+- 实例关系：`instance_invite_code`、`instance_invite`、`instance_relation_list`、`instance_relation_accept`、`instance_relation_reject`、`instance_relation_rename`、`instance_send_message`、`instance_session_list`、`instance_session_get`
 - MCP 工具：只有当前配置并连接成功时才会出现，不要默认它们一定可用
 
 ## 2. 文件和搜索工具的使用顺序
@@ -91,6 +91,7 @@
 - 拒绝好友申请用 `instance_relation_reject(key=...)`
 - 给关系设置备注用 `instance_relation_rename(key=..., name=...)`
 - 给另一个实例发消息用 `instance_send_message(key=..., message=...)`
+- 用户问“你刚才和哪个 Nomi 聊了什么”时，用 `instance_session_list()` 找最近 instance 会话，再用 `instance_session_get(key=...)` 读取具体聊天内容
 - 当前已落地的是基础聊天关系；`task/all` 权限只是关系模型保留，不要声称已经能让对方创建任务、安装 skill 或修改 MCP
 
 ## 10. 一般习惯

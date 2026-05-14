@@ -87,7 +87,7 @@ nomi instance rename xmy 小美
 
 核心流程在：
 
-- [nomi/runtime/app.py](../nomi/runtime/app.py#L171-L308)
+- [nomi/runtime/app.py](../nomi/runtime/app.py#L171-L350)
 - [nomi/instance_channel/manager.py](../nomi/instance_channel/manager.py#L19-L143)
 - [nomi/instance_channel/invite.py](../nomi/instance_channel/invite.py#L11-L40)
 
@@ -130,12 +130,41 @@ actor = "instance"
 这样对方实例不会被当成普通用户。对应的 channel prompt 在：
 
 - [nomi/templates/CHANNEL_INSTANCE.md](../nomi/templates/CHANNEL_INSTANCE.md#L1-L5)
-- [nomi/agent/context/system_prompt.py](../nomi/agent/context/system_prompt.py#L72-L80)
+- [nomi/agent/context/system_prompt.py](../nomi/agent/context/system_prompt.py#L69-L79)
 
 消息执行入口：
 
-- [nomi/runtime/app.py](../nomi/runtime/app.py#L310-L335)
+- [nomi/runtime/app.py](../nomi/runtime/app.py#L352-L385)
 - [nomi/agent/loop_runtime/dispatch.py](../nomi/agent/loop_runtime/dispatch.py#L138-L165)
+
+## Instance 会话
+
+双方都会写入自己的唯一 instance 会话：
+
+```text
+instance:<relation-key>
+```
+
+发送方在本地写入：
+
+- outbound：我发给对方的消息。
+- inbound：对方返回的回复。
+- error：HTTP 调用失败时的错误记录。
+
+接收方也写入同一条 `instance:<local-relation-key>` 会话，用户后续问“刚才和哪个 Nomi 聊了什么”时，可由工具读取。关系备注只影响展示名，不改变 session id。
+
+每条 instance 会话消息会带内部 metadata：
+
+```json
+{
+  "channel": "instance",
+  "peer_key": "xmy",
+  "direction": "outbound",
+  "actor": "self_instance"
+}
+```
+
+接收消息时，如果 `from_key` 和本地关系 key 不一致，runtime 会用 `from_url/from_token` 按 endpoint 匹配已有关系。
 
 ## Agent 工具
 
@@ -148,10 +177,12 @@ actor = "instance"
 - `instance_relation_reject`
 - `instance_relation_rename`
 - `instance_send_message`
+- `instance_session_list`
+- `instance_session_get`
 
-工具定义在 [nomi/agent/tools/instance_relations.py](../nomi/agent/tools/instance_relations.py#L19-L157)，由 runtime 在初始化和 reload 后注册：
+工具定义在 [nomi/agent/tools/instance_relations.py](../nomi/agent/tools/instance_relations.py#L19-L311)，由 runtime 在初始化和 reload 后注册：
 
-- [nomi/runtime/app.py](../nomi/runtime/app.py#L1421-L1445)
+- [nomi/runtime/app.py](../nomi/runtime/app.py#L1655-L1680)
 
 用户可以在微信、desktop 或 CLI 里自然表达：
 
@@ -161,6 +192,7 @@ actor = "instance"
 同意添加 xmy
 备注 xmy 为 小美
 问一下小美几点方便
+你刚才和小美聊了什么
 ```
 
 ## 当前边界

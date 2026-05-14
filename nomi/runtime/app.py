@@ -217,7 +217,10 @@ class NomiRuntime:
 
     def list_instance_relations(self) -> list[dict]:
         """列出当前 instance 关系。"""
-        return [relation.to_dict() | {"key": relation.key} for relation in self.instance_relations.list_relations()]
+        return [
+            relation.to_dict() | {"key": relation.key}
+            for relation in self.instance_relations.list_relations()
+        ]
 
     async def accept_instance_relation(self, key: str, permission: str = "chat") -> dict:
         """接受一条 instance 关系。"""
@@ -264,13 +267,45 @@ class NomiRuntime:
     async def send_instance_message(self, key: str, message: str) -> dict:
         """向另一个 instance 发送聊天消息。"""
         relation = self.instance_relations.require_permission(key, "chat")
+        content = str(message or "").strip()
+        if not content:
+            raise ValueError("message content cannot be empty")
+        session_key = self._instance_session_key(relation.key)
+        self._append_instance_session_message(
+            relation.key,
+            role="user",
+            content=content,
+            direction="outbound",
+            actor="self_instance",
+        )
         payload = {
             "from_key": get_instance_name() or "default",
-            "content": str(message or "").strip(),
+            "from_url": f"http://{self.state.config.remote.host}:{self.state.config.remote.port}",
+            "from_token": str(self.state.config.remote.auth_token or "").strip(),
+            "content": content,
         }
-        if not payload["content"]:
-            raise ValueError("message content cannot be empty")
-        return await self.instance_relations.client.send_message(relation, payload)
+        try:
+            result = await self.instance_relations.client.send_message(relation, payload)
+        except Exception as exc:
+            self._append_instance_session_message(
+                relation.key,
+                role="assistant",
+                content=f"Instance 消息发送失败：{exc}",
+                direction="error",
+                actor="system",
+            )
+            raise
+        reply = str(result.get("content") or "").strip()
+        if reply:
+            self._append_instance_session_message(
+                relation.key,
+                role="assistant",
+                content=reply,
+                direction="inbound",
+                actor="remote_instance",
+            )
+        result.setdefault("session_id", session_key)
+        return result
 
     async def receive_instance_relation_request(self, payload: dict) -> dict:
         """处理其它 instance 发来的关系申请。"""
@@ -316,12 +351,11 @@ class NomiRuntime:
 
     async def receive_instance_message(self, payload: dict) -> dict:
         """处理其它 instance 发来的聊天消息。"""
-        key = str(payload.get("from_key") or "").strip().lower()
         content = str(payload.get("content") or "").strip()
         if not content:
             raise ValueError("content is required")
-        relation = self.instance_relations.require_permission(key, "chat")
-        session_key = f"instance:{relation.key}"
+        relation = self._resolve_instance_message_relation(payload)
+        session_key = self._instance_session_key(relation.key)
         result = await self.agent_loop.process_direct_result(
             content,
             session_key=session_key,
@@ -332,13 +366,199 @@ class NomiRuntime:
                 "_session_id": session_key,
                 "_actor": "instance",
                 "_instance_relation_key": relation.key,
+                "_instance_direction": "inbound",
+                "_instance_peer_key": relation.key,
             },
+        )
+        self._annotate_latest_instance_messages(
+            relation.key,
+            user_direction="inbound",
+            user_actor="remote_instance",
+            assistant_direction="outbound",
+            assistant_actor="self_instance",
         )
         return {
             "ok": True,
             "session_id": result.session_key,
             "content": result.final_content,
             "stop_reason": result.stop_reason,
+        }
+
+    def list_instance_sessions(self, limit: int = 10) -> list[dict]:
+        """列出最近 instance 会话摘要。"""
+        normalized_limit = max(1, int(limit or 10))
+        relation_by_key = {
+            relation.key: relation for relation in self.instance_relations.list_relations()
+        }
+        sessions = []
+        for item in self.agent_loop.sessions.list_sessions():
+            session_id = str(item.get("session_id") or item.get("key") or "")
+            if not session_id.startswith("instance:"):
+                continue
+            key = session_id.split(":", 1)[1]
+            relation = relation_by_key.get(key)
+            sessions.append(
+                {
+                    "key": key,
+                    "session_id": session_id,
+                    "name": relation.name if relation is not None else "",
+                    "status": relation.status if relation is not None else "unknown",
+                    "permission": relation.permission if relation is not None else "",
+                    "message_count": int(item.get("message_count") or 0),
+                    "updated_at": item.get("updated_at"),
+                    "updated_at_ms": item.get("updated_at_ms"),
+                }
+            )
+        return sessions[:normalized_limit]
+
+    def get_instance_session_messages(self, key: str, limit: int = 20) -> dict:
+        """读取某个 instance 会话的最近消息。"""
+        relation_key = str(key or "").strip().lower()
+        if not relation_key:
+            raise ValueError("key is required")
+        session_id = self._instance_session_key(relation_key)
+        session = self.agent_loop.sessions.get(session_id)
+        messages = list(session.messages) if session is not None else []
+        normalized_limit = max(1, int(limit or 20))
+        relation = self.instance_relations.get_relation(relation_key)
+        return {
+            "key": relation_key,
+            "session_id": session_id,
+            "name": relation.name if relation is not None else "",
+            "status": relation.status if relation is not None else "unknown",
+            "messages": [
+                self._format_instance_session_message(item)
+                for item in messages[-normalized_limit:]
+            ],
+        }
+
+    def _resolve_instance_message_relation(self, payload: dict) -> object:
+        """按 key 或 endpoint 解析发信方 instance 关系。"""
+        key = str(payload.get("from_key") or "").strip().lower()
+        if key:
+            relation = self.instance_relations.get_relation(key)
+            if relation is not None:
+                if not relation.allows("chat"):
+                    raise PermissionError(f"instance relation {key} does not allow chat")
+                return relation
+        from_url = str(payload.get("from_url") or "").strip().rstrip("/")
+        from_token = str(payload.get("from_token") or "").strip()
+        if from_url and from_token:
+            relation = self.instance_relations.find_relation_by_endpoint(from_url, from_token)
+            if relation is not None and relation.allows("chat"):
+                return relation
+        raise PermissionError("instance relation not found or does not allow chat")
+
+    @staticmethod
+    def _instance_session_key(key: str) -> str:
+        """返回 instance 关系对应的唯一会话键。"""
+        return f"instance:{str(key or '').strip().lower()}"
+
+    def _append_instance_session_message(
+        self,
+        key: str,
+        *,
+        role: str,
+        content: str,
+        direction: str,
+        actor: str,
+    ) -> None:
+        """向本地 instance 会话追加一条带元数据的消息。"""
+        relation_key = str(key or "").strip().lower()
+        session = self.agent_loop.sessions.get_or_create(self._instance_session_key(relation_key))
+        relation = self.instance_relations.get_relation(relation_key)
+        session.metadata["source"] = "instance"
+        session.metadata["peer_key"] = relation_key
+        if relation is not None and relation.name:
+            session.metadata["title"] = relation.name
+        elif "title" not in session.metadata:
+            session.metadata["title"] = relation_key
+        session.add_message(
+            role,
+            content,
+            metadata={
+                "channel": "instance",
+                "peer_key": relation_key,
+                "direction": direction,
+                "actor": actor,
+            },
+        )
+        self.agent_loop.sessions.save(session)
+
+    def _annotate_latest_instance_messages(
+        self,
+        key: str,
+        *,
+        user_direction: str,
+        user_actor: str,
+        assistant_direction: str,
+        assistant_actor: str,
+    ) -> None:
+        """给 AgentLoop 刚写入的 instance 会话消息补充元数据。"""
+        relation_key = str(key or "").strip().lower()
+        session = self.agent_loop.sessions.get(self._instance_session_key(relation_key))
+        if session is None:
+            return
+        self._ensure_instance_session_metadata(session, relation_key)
+        pending = {
+            "user": (user_direction, user_actor),
+            "assistant": (assistant_direction, assistant_actor),
+        }
+        for message in reversed(session.messages):
+            role = str(message.get("role") or "")
+            if role not in pending:
+                continue
+            direction, actor = pending.pop(role)
+            metadata = dict(message.get("metadata") or {})
+            metadata.update(
+                {
+                    "channel": "instance",
+                    "peer_key": relation_key,
+                    "direction": direction,
+                    "actor": actor,
+                }
+            )
+            message["metadata"] = metadata
+            if not pending:
+                break
+        self.agent_loop.sessions.save(session)
+
+    def _ensure_instance_session_metadata(self, session: Session, key: str) -> None:
+        """确保 instance 会话摘要元数据完整。"""
+        relation_key = str(key or "").strip().lower()
+        relation = self.instance_relations.get_relation(relation_key)
+        session.metadata["source"] = "instance"
+        session.metadata["peer_key"] = relation_key
+        if relation is not None and relation.name:
+            session.metadata["title"] = relation.name
+        elif "title" not in session.metadata:
+            session.metadata["title"] = relation_key
+
+    @staticmethod
+    def _format_instance_session_message(message: dict) -> dict:
+        """把 instance 原始消息格式化为查询工具可读结构。"""
+        metadata = dict(message.get("metadata") or {})
+        direction = str(metadata.get("direction") or "")
+        actor = str(metadata.get("actor") or "")
+        if direction == "outbound" and actor == "self_instance":
+            label = "我发给对方"
+        elif direction == "inbound" and actor == "remote_instance":
+            label = "对方发来"
+        elif direction == "inbound":
+            label = "对方回复"
+        elif direction == "outbound":
+            label = "我方回复"
+        elif direction == "error":
+            label = "错误"
+        else:
+            label = "消息"
+        return {
+            "role": message.get("role", ""),
+            "content": message.get("content", ""),
+            "timestamp": message.get("timestamp"),
+            "direction": direction,
+            "actor": actor,
+            "label": label,
         }
 
     def interrupt_session(
@@ -1445,6 +1665,8 @@ class NomiRuntime:
             InstanceRelationRejectTool,
             InstanceRelationRenameTool,
             InstanceSendMessageTool,
+            InstanceSessionGetTool,
+            InstanceSessionListTool,
         )
 
         tools.register(InstanceInviteCodeTool(self))
@@ -1454,6 +1676,8 @@ class NomiRuntime:
         tools.register(InstanceRelationRejectTool(self))
         tools.register(InstanceRelationRenameTool(self))
         tools.register(InstanceSendMessageTool(self))
+        tools.register(InstanceSessionListTool(self))
+        tools.register(InstanceSessionGetTool(self))
 
     def _load_runtime_config_from_disk(self) -> Config:
         """读取并解析当前活动配置文件。"""

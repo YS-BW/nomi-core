@@ -38,6 +38,8 @@ IDENTITY.md
   ↓
 工作区 bootstrap files
   ↓
+内置 TOOLS.md
+  ↓
 长期记忆
   ↓
 skills 摘要
@@ -67,9 +69,10 @@ skills 摘要
 - `AGENTS.md`
 - `SOUL.md`
 - `USER.md`
-- `TOOLS.md`
 
-定义在 [nomi/agent/context/system_prompt.py](../nomi/agent/context/system_prompt.py#L16-L18)。
+定义在 [nomi/agent/context/system_prompt.py](../nomi/agent/context/system_prompt.py#L16-L16)。
+
+`TOOLS.md` 由 [nomi/templates/TOOLS.md](../nomi/templates/TOOLS.md#L1-L102) 作为包内模板注入，不再从 workspace 读取。
 
 #### 3. 长期记忆
 
@@ -145,7 +148,7 @@ runtime context 是本轮有效、但不适合进入长期 system prompt 的信�
 
 构造在：
 
-- [nomi/agent/context/runtime_blocks.py](../nomi/agent/context/runtime_blocks.py)
+- [nomi/agent/context/runtime_blocks.py](../nomi/agent/context/runtime_blocks.py#L18-L37)
 
 它会被放进当前用户消息，而不是 system prompt。
 
@@ -168,8 +171,8 @@ runtime context 是本轮有效、但不适合进入长期 system prompt 的信�
 
 相关代码：
 
-- 图片 MIME 识别：[nomi/agent/context/message_codec.py](../nomi/agent/context/message_codec.py)
-- 会话落盘清洗：[nomi/agent/execution/processor.py](../nomi/agent/execution/processor.py#L484-L518)
+- 图片 MIME 识别：[nomi/agent/context/message_codec.py](../nomi/agent/context/message_codec.py#L9-L19)
+- 会话落盘清洗：[nomi/agent/execution/processor.py](../nomi/agent/execution/processor.py#L579-L654)
 
 ---
 

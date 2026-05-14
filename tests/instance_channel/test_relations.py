@@ -14,6 +14,8 @@ from nomi.agent.tools.instance_relations import (
     InstanceRelationRejectTool,
     InstanceRelationRenameTool,
     InstanceSendMessageTool,
+    InstanceSessionGetTool,
+    InstanceSessionListTool,
 )
 from nomi.instance_channel.invite import build_invite_code, parse_invite_code
 from nomi.instance_channel.manager import InstanceRelationManager
@@ -140,6 +142,26 @@ async def test_instance_tools_call_runtime() -> None:
             calls.append(("send", key, message))
             return {"content": "pong"}
 
+        def list_instance_sessions(self, limit=10):
+            calls.append(("session_list", limit))
+            return [
+                {
+                    "key": "xmy",
+                    "name": "小美",
+                    "status": "friend",
+                    "message_count": 2,
+                    "updated_at": "2026-05-14T12:00:00",
+                }
+            ]
+
+        def get_instance_session_messages(self, key, limit=20):
+            calls.append(("session_get", key, limit))
+            return {
+                "key": key,
+                "name": "小美",
+                "messages": [{"label": "我发给对方", "content": "ping"}],
+            }
+
     runtime = RuntimeStub()
 
     assert "nomi://instance-invite" in await InstanceInviteCodeTool(runtime).execute(
@@ -156,6 +178,8 @@ async def test_instance_tools_call_runtime() -> None:
     assert "已拒绝" in await InstanceRelationRejectTool(runtime).execute(key="xmy")
     assert "备注" in await InstanceRelationRenameTool(runtime).execute(key="xmy", name="小美")
     assert await InstanceSendMessageTool(runtime).execute(key="xmy", message="ping") == "pong"
+    assert "最近 instance 会话" in await InstanceSessionListTool(runtime).execute(limit=5)
+    assert "我发给对方" in await InstanceSessionGetTool(runtime).execute(key="xmy", limit=5)
     assert calls == [
         ("invite_code", "http://127.0.0.1:8765"),
         ("invite", "xmy", None, None, "nomi://instance-invite?token=t"),
@@ -163,4 +187,6 @@ async def test_instance_tools_call_runtime() -> None:
         ("reject", "xmy"),
         ("rename", "xmy", "小美"),
         ("send", "xmy", "ping"),
+        ("session_list", 5),
+        ("session_get", "xmy", 5),
     ]

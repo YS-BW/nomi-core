@@ -13,7 +13,7 @@ from nomi.utils.prompt_templates import render_template
 class SystemPromptBuilder:
     """负责组装系统提示词主干。"""
 
-    BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md"]
+    BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md"]
     _MAX_RECENT_HISTORY = 50
 
     def __init__(
@@ -93,12 +93,15 @@ class SystemPromptBuilder:
         )
 
     def _load_bootstrap_files(self) -> str:
-        """加载工作区里的启动文件。"""
+        """加载工作区启动文件和包内工具说明。"""
         parts: list[str] = []
         for filename in self.BOOTSTRAP_FILES:
             file_path = self.workspace / filename
             if file_path.exists():
                 parts.append(f"## {filename}\n\n{file_path.read_text(encoding='utf-8')}")
+        tools_text = render_template("TOOLS.md", strip=True)
+        if tools_text:
+            parts.append(f"## TOOLS.md\n\n{tools_text}")
         return "\n\n".join(parts) if parts else ""
 
     def _build_long_term_memory(self) -> str:

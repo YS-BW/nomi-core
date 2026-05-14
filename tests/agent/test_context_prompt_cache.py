@@ -11,9 +11,9 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from nomi.agent.context.builder import ContextBuilder
+from nomi.agent.context.system_prompt import SystemPromptBuilder
 from nomi.agent.loop import AgentLoop
 from nomi.agent.memory import MemoryStore
-from nomi.agent.context.system_prompt import SystemPromptBuilder
 from nomi.agent.skills import SkillMetadata, SkillRegistry, SkillSpec
 from nomi.bus.queue import MessageBus
 from nomi.utils.workspace import sync_workspace_templates
@@ -52,6 +52,7 @@ def test_bootstrap_files_are_backed_by_templates() -> None:
 
     for filename in ContextBuilder.BOOTSTRAP_FILES:
         assert (template_dir / filename).is_file(), f"missing bootstrap template: {filename}"
+    assert (pkg_files("nomi") / "templates" / "TOOLS.md").is_file()
 
 
 def test_system_prompt_stays_stable_when_clock_changes(tmp_path, monkeypatch) -> None:

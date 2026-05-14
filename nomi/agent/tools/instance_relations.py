@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from nomi.agent.tools.base import Tool, tool_parameters
-from nomi.agent.tools.schema import StringSchema, tool_parameters_schema
+from nomi.agent.tools.schema import IntegerSchema, StringSchema, tool_parameters_schema
 
 
 class _InstanceTool(Tool):
@@ -119,7 +119,8 @@ class InstanceRelationListTool(_InstanceTool):
         for item in relations:
             label = item.get("name") or item["key"]
             lines.append(
-                f"- {item['key']}（{label}）：{item['status']} / {item['permission']} / {item['url']}"
+                f"- {item['key']}（{label}）："
+                f"{item['status']} / {item['permission']} / {item['url']}"
             )
         return "\n".join(lines)
 
@@ -229,3 +230,82 @@ class InstanceSendMessageTool(_InstanceTool):
         del kwargs
         result = await self._runtime.send_instance_message(key, message)
         return str(result.get("content") or "")
+
+
+@tool_parameters(
+    tool_parameters_schema(
+        required=[],
+        limit=IntegerSchema(description="最多列出多少条最近 instance 会话", minimum=1, maximum=50),
+    )
+)
+class InstanceSessionListTool(_InstanceTool):
+    """列出最近 instance 会话。"""
+
+    @property
+    def name(self) -> str:
+        """返回工具名。"""
+        return "instance_session_list"
+
+    @property
+    def description(self) -> str:
+        """返回工具说明。"""
+        return "列出最近的 Nomi instance 聊天会话，用于回答刚和哪些实例聊过。"
+
+    @property
+    def read_only(self) -> bool:
+        """会话列表查询不修改状态。"""
+        return True
+
+    async def execute(self, limit: int = 10, **kwargs: Any) -> str:
+        """读取最近 instance 会话摘要。"""
+        del kwargs
+        sessions = self._runtime.list_instance_sessions(limit=limit)
+        if not sessions:
+            return "当前没有 instance 聊天会话。"
+        lines = ["最近 instance 会话："]
+        for item in sessions:
+            label = item.get("name") or item["key"]
+            lines.append(
+                f"- {item['key']}（{label}）：{item['status']}，"
+                f"{item['message_count']} 条消息，最近更新 {item.get('updated_at') or '未知'}"
+            )
+        return "\n".join(lines)
+
+
+@tool_parameters(
+    tool_parameters_schema(
+        required=["key"],
+        key=StringSchema("关系 key，例如 xmy", min_length=1),
+        limit=IntegerSchema(description="最多读取多少条最近消息", minimum=1, maximum=100),
+    )
+)
+class InstanceSessionGetTool(_InstanceTool):
+    """读取某个 instance 会话。"""
+
+    @property
+    def name(self) -> str:
+        """返回工具名。"""
+        return "instance_session_get"
+
+    @property
+    def description(self) -> str:
+        """返回工具说明。"""
+        return "读取某个 Nomi instance 聊天会话的最近消息。"
+
+    @property
+    def read_only(self) -> bool:
+        """会话读取不修改状态。"""
+        return True
+
+    async def execute(self, key: str, limit: int = 20, **kwargs: Any) -> str:
+        """读取指定 instance 会话最近消息。"""
+        del kwargs
+        payload = self._runtime.get_instance_session_messages(key, limit=limit)
+        messages = payload.get("messages") or []
+        label = payload.get("name") or payload["key"]
+        if not messages:
+            return f"没有找到 {payload['key']}（{label}）的 instance 聊天记录。"
+        lines = [f"{payload['key']}（{label}）最近消息："]
+        for item in messages:
+            lines.append(f"- {item['label']}：{item['content']}")
+        return "\n".join(lines)

@@ -44,6 +44,8 @@ Workspace 是某个 instance root 下的 agent 工作区 📁🌍
 
 这两个目录不要混着理解。
 
+`TOOLS.md` 不属于工作区文件。工具说明由 core 包内模板注入 system prompt，避免每个实例复制一份后漂移。
+
 ---
 
 ## 首次初始化会写哪些模板
@@ -53,7 +55,6 @@ Workspace 是某个 instance root 下的 agent 工作区 📁🌍
 - `AGENTS.md`
 - `SOUL.md`
 - `USER.md`
-- `TOOLS.md`
 - `memory/MEMORY.md`
 - `memory/history.jsonl`
 
@@ -68,7 +69,6 @@ Workspace 是某个 instance root 下的 agent 工作区 📁🌍
 ├── AGENTS.md
 ├── SOUL.md
 ├── USER.md
-├── TOOLS.md
 ├── memory/
 │   ├── MEMORY.md
 │   ├── history.jsonl
@@ -88,7 +88,6 @@ Workspace 是某个 instance root 下的 agent 工作区 📁🌍
 | `AGENTS.md` | 当前工作区的项目规则与开发说明 |
 | `SOUL.md` | AI 自我约束和风格 |
 | `USER.md` | 已确认的用户画像 |
-| `TOOLS.md` | 工具使用规则 |
 | `memory/MEMORY.md` | 长期事实记忆 |
 | `memory/history.jsonl` | 长期归档历史 |
 | `memory/user_profile_candidates.json` | 待确认画像候选 |

@@ -25,12 +25,19 @@ class _LoopStub:
     def __init__(self, workspace: Path) -> None:
         self.sessions = SessionManager(workspace)
         self.process_direct = AsyncMock(return_value="ok")
-        self.process_direct_result = AsyncMock(
-            return_value=SimpleNamespace(
-                session_key="instance:xmy",
-                final_content="pong",
-                stop_reason="completed",
-            )
+        self.process_direct_result = AsyncMock(side_effect=self._process_direct_result)
+
+    async def _process_direct_result(self, content: str, **kwargs) -> SimpleNamespace:
+        """模拟 AgentLoop 处理消息并写入 session。"""
+        session_key = kwargs.get("session_key") or "instance:xmy"
+        session = self.sessions.get_or_create(session_key)
+        session.add_message("user", content)
+        session.add_message("assistant", "pong")
+        self.sessions.save(session)
+        return SimpleNamespace(
+            session_key=session_key,
+            final_content="pong",
+            stop_reason="completed",
         )
 
 
@@ -64,6 +71,8 @@ class _InstanceClientStub:
         """初始化调用记录。"""
         self.requests: list[tuple[object, dict]] = []
         self.responses: list[tuple[object, dict]] = []
+        self.messages: list[tuple[object, dict]] = []
+        self.message_result: dict = {"ok": True, "content": "remote pong"}
 
     async def send_relation_request(self, relation, payload: dict) -> dict:
         """记录关系申请。"""
@@ -74,6 +83,11 @@ class _InstanceClientStub:
         """记录关系响应。"""
         self.responses.append((relation, payload))
         return {"ok": True}
+
+    async def send_message(self, relation, payload: dict) -> dict:
+        """记录实例消息。"""
+        self.messages.append((relation, payload))
+        return dict(self.message_result)
 
 
 class _NotificationStub:
@@ -210,8 +224,154 @@ async def test_runtime_receive_instance_message_uses_instance_identity(tmp_path:
             "_session_id": "instance:xmy",
             "_actor": "instance",
             "_instance_relation_key": "xmy",
+            "_instance_direction": "inbound",
+            "_instance_peer_key": "xmy",
         },
     )
+    session = runtime.agent_loop.sessions.get("instance:xmy")
+    assert session is not None
+    assert session.metadata["source"] == "instance"
+    assert session.messages[-2]["metadata"]["direction"] == "inbound"
+    assert session.messages[-2]["metadata"]["actor"] == "remote_instance"
+    assert session.messages[-1]["metadata"]["direction"] == "outbound"
+    assert session.messages[-1]["metadata"]["actor"] == "self_instance"
+
+
+@pytest.mark.asyncio
+async def test_runtime_send_instance_message_records_sender_session(tmp_path: Path) -> None:
+    """发送 instance 消息时发送方也应写入唯一 instance 会话。"""
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    config.remote.auth_token = "local-token"
+    loop_stub = _LoopStub(config.workspace_path)
+    runtime = NomiRuntime.from_config(
+        config,
+        provider_builder=lambda _config: object(),
+        agent_loop_factory=lambda **_kwargs: loop_stub,
+    )
+    client = _InstanceClientStub()
+    runtime.instance_relations.client = client
+    runtime.instance_relations.upsert_pending(
+        key="xmy",
+        url="http://127.0.0.1:8766",
+        token="token",
+    )
+    runtime.instance_relations.accept("xmy", "chat")
+
+    result = await runtime.send_instance_message("xmy", "ping")
+
+    assert result["content"] == "remote pong"
+    assert result["session_id"] == "instance:xmy"
+    assert client.messages[0][1]["from_token"] == "local-token"
+    session = runtime.agent_loop.sessions.get("instance:xmy")
+    assert session is not None
+    assert [item["content"] for item in session.messages] == ["ping", "remote pong"]
+    assert session.messages[0]["metadata"]["direction"] == "outbound"
+    assert session.messages[0]["metadata"]["actor"] == "self_instance"
+    assert session.messages[1]["metadata"]["direction"] == "inbound"
+    assert session.messages[1]["metadata"]["actor"] == "remote_instance"
+
+
+@pytest.mark.asyncio
+async def test_runtime_send_instance_message_records_error(tmp_path: Path) -> None:
+    """HTTP 失败时发送方会话应保留失败记录。"""
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    loop_stub = _LoopStub(config.workspace_path)
+    runtime = NomiRuntime.from_config(
+        config,
+        provider_builder=lambda _config: object(),
+        agent_loop_factory=lambda **_kwargs: loop_stub,
+    )
+
+    class FailingClient(_InstanceClientStub):
+        async def send_message(self, relation, payload: dict) -> dict:
+            """模拟发送失败。"""
+            raise RuntimeError("boom")
+
+    runtime.instance_relations.client = FailingClient()
+    runtime.instance_relations.upsert_pending(
+        key="xmy",
+        url="http://127.0.0.1:8766",
+        token="token",
+    )
+    runtime.instance_relations.accept("xmy", "chat")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await runtime.send_instance_message("xmy", "ping")
+
+    session = runtime.agent_loop.sessions.get("instance:xmy")
+    assert session is not None
+    assert session.messages[-1]["metadata"]["direction"] == "error"
+    assert "boom" in session.messages[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_receive_instance_message_matches_endpoint_when_key_differs(
+    tmp_path: Path,
+) -> None:
+    """收消息时 from_key 不一致也应能通过 endpoint 命中本地关系。"""
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    loop_stub = _LoopStub(config.workspace_path)
+    runtime = NomiRuntime.from_config(
+        config,
+        provider_builder=lambda _config: object(),
+        agent_loop_factory=lambda **_kwargs: loop_stub,
+    )
+    runtime.instance_relations.upsert_pending(
+        key="alias",
+        url="http://127.0.0.1:8766",
+        token="token-x",
+    )
+    runtime.instance_relations.accept("alias", "chat")
+
+    result = await runtime.receive_instance_message(
+        {
+            "from_key": "remote-name",
+            "from_url": "http://127.0.0.1:8766",
+            "from_token": "token-x",
+            "content": "ping",
+        }
+    )
+
+    assert result["session_id"] == "instance:alias"
+    loop_stub.process_direct_result.assert_awaited_once()
+    assert loop_stub.process_direct_result.await_args.kwargs["session_key"] == "instance:alias"
+    assert runtime.agent_loop.sessions.get("instance:alias") is not None
+
+
+def test_runtime_instance_session_queries_format_messages(tmp_path: Path) -> None:
+    """instance_session 查询应返回最近唯一会话与可读消息。"""
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    loop_stub = _LoopStub(config.workspace_path)
+    runtime = NomiRuntime.from_config(
+        config,
+        provider_builder=lambda _config: object(),
+        agent_loop_factory=lambda **_kwargs: loop_stub,
+    )
+    runtime.instance_relations.upsert_pending(
+        key="xmy",
+        url="http://127.0.0.1:8766",
+        token="token",
+        name="小美",
+    )
+    runtime.instance_relations.accept("xmy", "chat")
+    runtime._append_instance_session_message(
+        "xmy",
+        role="user",
+        content="ping",
+        direction="outbound",
+        actor="self_instance",
+    )
+
+    sessions = runtime.list_instance_sessions()
+    messages = runtime.get_instance_session_messages("xmy")
+
+    assert sessions[0]["key"] == "xmy"
+    assert sessions[0]["name"] == "小美"
+    assert messages["messages"][0]["label"] == "我发给对方"
 
 
 @pytest.mark.asyncio
