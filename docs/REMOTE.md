@@ -189,6 +189,16 @@ POST   /v1/mcp/{name}/enable
 POST   /v1/mcp/{name}/disable
 ```
 
+Instance Channel 内部路由：
+
+```text
+POST /v1/instance/relations/request
+POST /v1/instance/relations/response
+POST /v1/instance/messages
+```
+
+这三条路由复用 remote listener 和 Bearer token，但属于 core 内部实例通道，不属于 desktop 的 `nomi-protocol` 公开协议面。详情见 [INSTANCE_CHANNEL.md](./INSTANCE_CHANNEL.md)。
+
 ## SSE
 
 Endpoint：

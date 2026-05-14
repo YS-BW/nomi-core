@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import tempfile
 from collections.abc import AsyncIterator
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
@@ -100,6 +102,7 @@ class _FakeRuntime:
         self.provider_updates: list[dict] = []
         self.active_provider_updates: list[dict] = []
         self.runtime_reload_calls = 0
+        self.instance_calls: list[tuple[str, dict]] = []
 
     async def create_turn(
         self,
@@ -508,6 +511,75 @@ class _FakeRuntime:
             "provider_state": self.provider_state,
         }
 
+    async def receive_instance_relation_request(self, payload: dict) -> dict:
+        """记录 instance 关系请求。"""
+        self.instance_calls.append(("request", payload))
+        return {"ok": True, "status": "pending", "key": payload.get("from_key")}
+
+    async def receive_instance_relation_response(self, payload: dict) -> dict:
+        """记录 instance 关系响应。"""
+        self.instance_calls.append(("response", payload))
+        return {"ok": True, "status": payload.get("status"), "key": payload.get("from_key")}
+
+    async def receive_instance_message(self, payload: dict) -> dict:
+        """记录 instance 消息。"""
+        self.instance_calls.append(("message", payload))
+        if payload.get("from_key") == "blocked":
+            raise PermissionError("instance relation blocked does not allow chat")
+        return {
+            "ok": True,
+            "session_id": f"instance:{payload.get('from_key')}",
+            "content": "instance pong",
+            "stop_reason": "completed",
+        }
+
+
+class _RelationRuntime:
+    """测试用真实关系握手 runtime。"""
+
+    def __init__(self, *, key: str, url: str, token: str) -> None:
+        """初始化一份关系状态。"""
+        from nomi.instance_channel.manager import InstanceRelationManager
+        from nomi.instance_channel.store import InstanceRelationStore
+
+        self.key = key
+        self.url = url
+        self.token = token
+        self.bus = MessageBus()
+        self.agent_loop = SimpleNamespace(sessions=_FakeSessions())
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.instance_relations = InstanceRelationManager(
+            store=InstanceRelationStore(Path(self._tmpdir.name) / "instance-relations.json")
+        )
+
+    async def receive_instance_relation_request(self, payload: dict) -> dict:
+        """处理关系申请。"""
+        relation = self.instance_relations.upsert_pending(
+            key=str(payload["from_key"]),
+            url=str(payload["from_url"]),
+            token=str(payload["from_token"]),
+        )
+        return {"ok": True, "status": relation.status, "key": relation.key}
+
+    async def receive_instance_relation_response(self, payload: dict) -> dict:
+        """处理关系确认。"""
+        key = str(payload.get("from_key") or "").strip().lower()
+        relation = self.instance_relations.get_relation(key)
+        if relation is None:
+            from_url = str(payload.get("from_url") or "").strip().rstrip("/")
+            from_token = str(payload.get("from_token") or "").strip()
+            relation = self.instance_relations.find_relation_by_endpoint(from_url, from_token)
+            if relation is None:
+                relation = self.instance_relations.upsert_pending(
+                    key=key,
+                    url=from_url,
+                    token=from_token,
+                )
+        relation.status = str(payload["status"])
+        relation.permission = str(payload["permission"])
+        self.instance_relations.store.put(relation)
+        return {"ok": True, "status": relation.status, "key": relation.key}
+
 
 def _config(port: int) -> Config:
     """构造 remote 测试配置。"""
@@ -835,6 +907,130 @@ async def test_remote_http_validation_error_includes_fields() -> None:
             assert response.json()["error"]["details"]["fields"][0]["field"] == "api_base"
     finally:
         await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_remote_instance_channel_routes_require_auth_and_delegate() -> None:
+    """instance 内部通道路由应鉴权并委托 runtime。"""
+    runtime = _FakeRuntime()
+    server = RemoteServer(_config(8892), runtime)  # type: ignore[arg-type]
+
+    await server.start()
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            unauthorized = await client.post(
+                "http://127.0.0.1:8892/v1/instance/relations/request",
+                json={"from_key": "xmy"},
+            )
+            assert unauthorized.status_code == 401
+
+            request = await client.post(
+                "http://127.0.0.1:8892/v1/instance/relations/request",
+                headers=_auth(),
+                json={"from_key": "xmy", "from_url": "http://127.0.0.1:8766", "from_token": "t"},
+            )
+            assert request.status_code == 200
+            assert request.json()["status"] == "pending"
+
+            response = await client.post(
+                "http://127.0.0.1:8892/v1/instance/relations/response",
+                headers=_auth(),
+                json={"from_key": "xmy", "status": "friend", "permission": "chat"},
+            )
+            assert response.status_code == 200
+
+            message = await client.post(
+                "http://127.0.0.1:8892/v1/instance/messages",
+                headers=_auth(),
+                json={"from_key": "xmy", "content": "ping"},
+            )
+            assert message.status_code == 200
+            assert message.json()["content"] == "instance pong"
+
+            forbidden = await client.post(
+                "http://127.0.0.1:8892/v1/instance/messages",
+                headers=_auth(),
+                json={"from_key": "blocked", "content": "ping"},
+            )
+            assert forbidden.status_code == 403
+            assert forbidden.json()["error"]["code"] == "forbidden"
+
+        assert runtime.instance_calls == [
+            (
+                "request",
+                {
+                    "from_key": "xmy",
+                    "from_url": "http://127.0.0.1:8766",
+                    "from_token": "t",
+                },
+            ),
+            ("response", {"from_key": "xmy", "status": "friend", "permission": "chat"}),
+            ("message", {"from_key": "xmy", "content": "ping"}),
+            ("message", {"from_key": "blocked", "content": "ping"}),
+        ]
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_remote_instance_relation_http_accept_round_trip() -> None:
+    """两个 instance 通过内部 HTTP 路由应能完成申请与确认闭环。"""
+    runtime_a = _RelationRuntime(
+        key="a",
+        url="http://127.0.0.1:8893",
+        token="token-a",
+    )
+    runtime_b = _RelationRuntime(
+        key="b",
+        url="http://127.0.0.1:8894",
+        token="token-b",
+    )
+    config_a = _config(8893)
+    config_b = _config(8894)
+    config_a.remote.auth_token = "token-a"
+    config_b.remote.auth_token = "token-b"
+    server_a = RemoteServer(config_a, runtime_a)  # type: ignore[arg-type]
+    server_b = RemoteServer(config_b, runtime_b)  # type: ignore[arg-type]
+
+    await server_a.start()
+    await server_b.start()
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            request = await client.post(
+                "http://127.0.0.1:8894/v1/instance/relations/request",
+                headers={"Authorization": "Bearer token-b"},
+                json={
+                    "from_key": "a",
+                    "from_url": "http://127.0.0.1:8893",
+                    "from_token": "token-a",
+                },
+            )
+            assert request.status_code == 200
+
+            relation_b = runtime_b.instance_relations.get_relation("a")
+            assert relation_b is not None
+            assert relation_b.status == "pending"
+
+            accept = await client.post(
+                "http://127.0.0.1:8893/v1/instance/relations/response",
+                headers={"Authorization": "Bearer token-a"},
+                json={
+                    "from_key": "b",
+                    "from_url": "http://127.0.0.1:8894",
+                    "from_token": "token-b",
+                    "status": "friend",
+                    "permission": "chat",
+                },
+            )
+            assert accept.status_code == 200
+
+            relation_a = runtime_a.instance_relations.get_relation("b")
+            assert relation_a is not None
+            assert relation_a.status == "friend"
+            assert relation_a.permission == "chat"
+    finally:
+        await server_a.stop()
+        await server_b.stop()
 
 
 @pytest.mark.asyncio

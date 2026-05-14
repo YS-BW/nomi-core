@@ -13,8 +13,8 @@ from loguru import logger
 from nomi.bus.events import InboundMessage, OutboundMessage
 
 if TYPE_CHECKING:
-    from nomi.agent.loop import AgentLoop
     from nomi.agent.execution.processor import DirectProcessResult
+    from nomi.agent.loop import AgentLoop
 
 
 class DispatchRuntime:
@@ -138,6 +138,8 @@ class DispatchRuntime:
         session_key: str = "cli:direct",
         channel: str = "cli",
         chat_id: str = "direct",
+        sender_id: str = "user",
+        metadata: dict | None = None,
         history_session_key: str | None = None,
         on_progress: Callable[[str], Awaitable[None]] | None = None,
         on_stream: Callable[[str], Awaitable[None]] | None = None,
@@ -150,9 +152,10 @@ class DispatchRuntime:
         normalized_key = loop._normalize_control_session_key(session_key)
         msg = InboundMessage(
             channel=channel,
-            sender_id="user",
+            sender_id=sender_id,
             chat_id=chat_id,
             content=content,
+            metadata=dict(metadata or {}),
             session_key_override=normalized_key,
         )
         lock = loop._control.get_lock(normalized_key)

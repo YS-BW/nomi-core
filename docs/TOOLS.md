@@ -82,6 +82,26 @@ Nomi 当前的工具系统已经接入主链路，不是外挂功能 🧰
 | `install_skill` | 安装 skill |
 | `uninstall_skill` | 卸载 skill |
 
+### Instance 关系工具
+
+| 工具 | 说明 |
+|---|---|
+| `instance_invite_code` | 生成当前实例的邀请码 |
+| `instance_invite` | 通过邀请码或 url/token 向另一个实例发起好友申请 |
+| `instance_relation_list` | 查看当前实例登记的关系、备注、状态和权限 |
+| `instance_relation_accept` | 接受一个实例好友申请 |
+| `instance_relation_reject` | 拒绝一个实例好友申请 |
+| `instance_relation_rename` | 设置或更新实例关系备注 |
+| `instance_send_message` | 向已成为好友且具备 `chat` 权限的实例发送消息 |
+
+实现文件：
+
+- [nomi/agent/tools/instance_relations.py](../nomi/agent/tools/instance_relations.py#L19-L157)
+
+这些工具由 `NomiRuntime` 挂载，因为它们需要访问当前实例的关系存储、remote token 和 InstanceChannel client：
+
+- [nomi/runtime/app.py](../nomi/runtime/app.py#L1421-L1445)
+
 ---
 
 ## 工具注册逻辑

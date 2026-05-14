@@ -12,23 +12,6 @@ from typing import Any
 
 from aiohttp import web
 from loguru import logger
-from pydantic import ValidationError
-
-from nomi import __version__
-from nomi.bus.events import OutboundMessage
-from nomi.config.schema import Config
-from nomi.remote.auth import is_authorized_request
-from nomi.remote.errors import RemoteApiError, api_error_response
-from nomi.remote.events import RemoteEventHub, format_sse_event, prepare_sse_response
-from nomi.runtime import NomiRuntime
-from nomi.runtime.errors import RuntimeConfigError
-from nomi.session.errors import (
-    DuplicateSessionIdError,
-    InvalidPageTokenError,
-    SessionDeleteForbiddenError,
-    SessionError,
-    SessionNotFoundError,
-)
 from nomi_protocol.events import SseEventEnvelope
 from nomi_protocol.http import (
     BootstrapResponse,
@@ -63,6 +46,23 @@ from nomi_protocol.http import (
     UpdateProviderResponse,
     UpdateTaskRequest,
     UpsertMcpRequest,
+)
+from pydantic import ValidationError
+
+from nomi import __version__
+from nomi.bus.events import OutboundMessage
+from nomi.config.schema import Config
+from nomi.remote.auth import is_authorized_request
+from nomi.remote.errors import RemoteApiError, api_error_response
+from nomi.remote.events import RemoteEventHub, format_sse_event, prepare_sse_response
+from nomi.runtime import NomiRuntime
+from nomi.runtime.errors import RuntimeConfigError
+from nomi.session.errors import (
+    DuplicateSessionIdError,
+    InvalidPageTokenError,
+    SessionDeleteForbiddenError,
+    SessionError,
+    SessionNotFoundError,
 )
 
 
@@ -174,6 +174,10 @@ class RemoteServer:
         app.router.add_post("/v1/mcp/{name}/enable", self._handle_enable_mcp)
         app.router.add_post("/v1/mcp/{name}/disable", self._handle_disable_mcp)
 
+        app.router.add_post("/v1/instance/relations/request", self._handle_instance_relation_request)
+        app.router.add_post("/v1/instance/relations/response", self._handle_instance_relation_response)
+        app.router.add_post("/v1/instance/messages", self._handle_instance_message)
+
     @web.middleware
     async def _error_middleware(
         self,
@@ -214,6 +218,8 @@ class RemoteServer:
             )
         except ValueError as exc:
             return self._with_cors(api_error_response("invalid_request", str(exc), status=400))
+        except PermissionError as exc:
+            return self._with_cors(api_error_response("forbidden", str(exc), status=403))
         except web.HTTPException:
             raise
         except Exception as exc:
@@ -716,6 +722,24 @@ class RemoteServer:
         )
         await self._publish_sidebar_snapshot()
         return self._json(McpResponse(mcp=item))
+
+    async def _handle_instance_relation_request(self, request: web.Request) -> web.Response:
+        """处理 instance 好友申请。"""
+        self._authorize(request)
+        result = await self._runtime.receive_instance_relation_request(await self._read_json(request))
+        return web.json_response(result)
+
+    async def _handle_instance_relation_response(self, request: web.Request) -> web.Response:
+        """处理 instance 好友申请确认结果。"""
+        self._authorize(request)
+        result = await self._runtime.receive_instance_relation_response(await self._read_json(request))
+        return web.json_response(result)
+
+    async def _handle_instance_message(self, request: web.Request) -> web.Response:
+        """处理 instance 聊天消息。"""
+        self._authorize(request)
+        result = await self._runtime.receive_instance_message(await self._read_json(request))
+        return web.json_response(result)
 
     async def _handle_outbound(self, message: OutboundMessage) -> None:
         """把 runtime outbound 转换为 SSE 事件。"""

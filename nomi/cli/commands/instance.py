@@ -6,8 +6,8 @@ import typer
 from rich.table import Table
 
 from nomi.cli.render import console
-from nomi.cli.support.config import instance_option, instance_root_option
-from nomi.cli.support.config import load_runtime_config
+from nomi.cli.support.config import instance_option, instance_root_option, load_runtime_config
+from nomi.cli.support.runtime_factory import make_runtime
 from nomi.cli.support.status import (
     build_instance_service_rows,
     format_home_path,
@@ -22,7 +22,6 @@ from nomi.config.instance import (
     remove_instance_root,
     remove_registered_instance,
 )
-from nomi.cli.support.runtime_factory import make_runtime
 from nomi.runtime.service.runner import (
     follow_log_file,
     restart_background_service,
@@ -60,6 +59,166 @@ def register_instance_command(app: typer.Typer) -> None:
                 "yes" if context.name == DEFAULT_INSTANCE_NAME or context.name else "no",
             )
         console.print(table)
+
+    @instance_app.command("invite-code")
+    def invite_code(
+        public_url: str | None = typer.Option(None, "--url", help="Public instance URL"),
+        config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+        instance: str | None = instance_option(),
+        instance_root: str | None = instance_root_option(),
+    ) -> None:
+        """生成当前实例的邀请信息。"""
+        loaded_config = load_runtime_config(
+            config,
+            None,
+            instance=instance,
+            instance_root=instance_root,
+            silent=True,
+        )
+        runtime = make_runtime(loaded_config)
+        console.print(runtime.build_instance_invite_code(public_url))
+
+    @instance_app.command("invite")
+    def invite(
+        key: str,
+        url: str | None = typer.Option(None, "--url", help="Target instance URL"),
+        token: str | None = typer.Option(None, "--token", help="Target instance token"),
+        from_code: str | None = typer.Option(None, "--from-code", help="Instance invite code"),
+        config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+        instance: str | None = instance_option(),
+        instance_root: str | None = instance_root_option(),
+    ) -> None:
+        """向另一个实例发起好友申请。"""
+        loaded_config = load_runtime_config(
+            config,
+            None,
+            instance=instance,
+            instance_root=instance_root,
+            silent=True,
+        )
+        runtime = make_runtime(loaded_config)
+        import asyncio
+
+        asyncio.run(runtime.invite_instance(key, url=url, token=token, invite_code=from_code))
+        console.print(f"[green]✓[/green] 已向 {key} 发送好友申请")
+
+    @instance_app.command("relations")
+    def relations(
+        config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+        instance: str | None = instance_option(),
+        instance_root: str | None = instance_root_option(),
+    ) -> None:
+        """列出当前实例关系。"""
+        loaded_config = load_runtime_config(
+            config,
+            None,
+            instance=instance,
+            instance_root=instance_root,
+            silent=True,
+        )
+        runtime = make_runtime(loaded_config)
+        table = Table(show_header=True, header_style="bold cyan")
+        table.add_column("Key", style="cyan", no_wrap=True)
+        table.add_column("Name", style="white")
+        table.add_column("Status", style="white")
+        table.add_column("Permission", style="white")
+        table.add_column("URL", style="white")
+        for relation in runtime.list_instance_relations():
+            table.add_row(
+                relation["key"],
+                relation.get("name") or "-",
+                relation.get("status") or "-",
+                relation.get("permission") or "-",
+                relation.get("url") or "-",
+            )
+        console.print(table)
+
+    @instance_app.command("accept")
+    def accept(
+        key: str,
+        permission: str = typer.Option("chat", "--permission", help="chat|task|all"),
+        config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+        instance: str | None = instance_option(),
+        instance_root: str | None = instance_root_option(),
+    ) -> None:
+        """接受一条实例好友申请。"""
+        loaded_config = load_runtime_config(
+            config,
+            None,
+            instance=instance,
+            instance_root=instance_root,
+            silent=True,
+        )
+        runtime = make_runtime(loaded_config)
+        import asyncio
+
+        relation = asyncio.run(runtime.accept_instance_relation(key, permission))
+        console.print(
+            f"[green]✓[/green] 已接受 {relation['key']}，权限：{relation['permission']}"
+        )
+
+    @instance_app.command("reject")
+    def reject(
+        key: str,
+        config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+        instance: str | None = instance_option(),
+        instance_root: str | None = instance_root_option(),
+    ) -> None:
+        """拒绝一条实例好友申请。"""
+        loaded_config = load_runtime_config(
+            config,
+            None,
+            instance=instance,
+            instance_root=instance_root,
+            silent=True,
+        )
+        runtime = make_runtime(loaded_config)
+        import asyncio
+
+        asyncio.run(runtime.reject_instance_relation_async(key))
+        console.print(f"[green]✓[/green] 已拒绝 {key}")
+
+    @instance_app.command("rename")
+    def rename(
+        key: str,
+        name: str,
+        config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+        instance: str | None = instance_option(),
+        instance_root: str | None = instance_root_option(),
+    ) -> None:
+        """更新实例关系备注。"""
+        loaded_config = load_runtime_config(
+            config,
+            None,
+            instance=instance,
+            instance_root=instance_root,
+            silent=True,
+        )
+        runtime = make_runtime(loaded_config)
+        relation = runtime.rename_instance_relation(key, name)
+        console.print(f"[green]✓[/green] 已把 {relation['key']} 备注为 {relation['name']}")
+
+    @instance_app.command("send")
+    def send(
+        key: str,
+        message: str,
+        config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+        instance: str | None = instance_option(),
+        instance_root: str | None = instance_root_option(),
+    ) -> None:
+        """向另一个实例发送消息。"""
+        loaded_config = load_runtime_config(
+            config,
+            None,
+            instance=instance,
+            instance_root=instance_root,
+            silent=True,
+        )
+        runtime = make_runtime(loaded_config)
+        import asyncio
+
+        result = asyncio.run(runtime.send_instance_message(key, message))
+        console.print(result.get("content") or "")
 
     @instance_app.command("create")
     def create_instance(name: str) -> None:

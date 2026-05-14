@@ -12,16 +12,22 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from loguru import logger
+
 from nomi import __version__
 from nomi.agent.loop import AgentLoop
 from nomi.agent.skills.manager import SkillManager
 from nomi.bus.events import InboundMessage, OutboundMessage
 from nomi.bus.queue import MessageBus
+from nomi.config.instance import get_instance_name
 from nomi.config.loader import get_config_path, load_config, resolve_config_env_vars, save_config
 from nomi.config.paths import get_data_dir
 from nomi.config.schema import Config
 from nomi.config.schema.tools import MCPServerConfig
 from nomi.cron.types import CronSchedule
+from nomi.instance_channel.invite import build_invite_code, parse_invite_code
+from nomi.instance_channel.manager import InstanceRelationManager
+from nomi.instance_channel.notification import NotificationService
 from nomi.providers.base import LLMProvider
 from nomi.providers.capabilities.transcription import build_transcription_provider
 from nomi.providers.factory.build import build_provider
@@ -78,6 +84,7 @@ class NomiRuntime:
         """
         self.state = state
         self.lifecycle = RuntimeLifecycle(state)
+        self._bind_instance_relation_runtime()
 
     @classmethod
     def from_config(
@@ -160,6 +167,179 @@ class NomiRuntime:
         }
         self.state.reminder_consumers = normalized
         self.agent_loop.set_reminder_consumers(normalized)
+
+    def build_instance_invite_code(self, public_url: str | None = None) -> str:
+        """生成当前 instance 的邀请信息。"""
+        url = str(public_url or "").strip().rstrip("/")
+        if not url:
+            url = f"http://{self.state.config.remote.host}:{self.state.config.remote.port}"
+        token = str(self.state.config.remote.auth_token or "").strip()
+        if not token:
+            raise ValueError("remote.auth_token is required to build instance invite code")
+        return build_invite_code(
+            name=get_instance_name() or "default",
+            url=url,
+            token=token,
+        )
+
+    async def invite_instance(
+        self,
+        key: str,
+        *,
+        url: str | None = None,
+        token: str | None = None,
+        invite_code: str | None = None,
+    ) -> dict:
+        """向另一个 instance 发起关系申请。"""
+        relation_name = ""
+        if invite_code:
+            parsed = parse_invite_code(invite_code)
+            url = parsed["url"]
+            token = parsed["token"]
+            relation_name = parsed["name"]
+        if not url or not token:
+            raise ValueError("url and token are required")
+        payload = {
+            "from_key": get_instance_name() or "default",
+            "from_url": f"http://{self.state.config.remote.host}:{self.state.config.remote.port}",
+            "from_token": str(self.state.config.remote.auth_token or "").strip(),
+            "message": f"{get_instance_name() or 'default'} 想添加你为好友",
+        }
+        if not payload["from_token"]:
+            raise ValueError("remote.auth_token is required before inviting another instance")
+        return await self.instance_relations.send_invite(
+            key=key,
+            url=url,
+            token=token,
+            payload=payload,
+            name=relation_name,
+        )
+
+    def list_instance_relations(self) -> list[dict]:
+        """列出当前 instance 关系。"""
+        return [relation.to_dict() | {"key": relation.key} for relation in self.instance_relations.list_relations()]
+
+    async def accept_instance_relation(self, key: str, permission: str = "chat") -> dict:
+        """接受一条 instance 关系。"""
+        relation = self.instance_relations.accept(key, permission)
+        await self.instance_relations.notify_relation_accepted(key)
+        payload = {
+            "from_key": get_instance_name() or "default",
+            "from_url": f"http://{self.state.config.remote.host}:{self.state.config.remote.port}",
+            "from_token": str(self.state.config.remote.auth_token or "").strip(),
+            "status": relation.status,
+            "permission": relation.permission,
+        }
+        try:
+            await self.instance_relations.client.send_relation_response(relation, payload)
+        except Exception as exc:
+            logger.warning("Instance relation accept callback failed: key={} error={}", key, exc)
+        return relation.to_dict() | {"key": relation.key}
+
+    def reject_instance_relation(self, key: str) -> bool:
+        """拒绝一条 instance 关系。"""
+        return self.instance_relations.reject(key)
+
+    async def reject_instance_relation_async(self, key: str) -> bool:
+        """拒绝一条 instance 关系并尝试通知对方。"""
+        relation = self.instance_relations.get_relation(key)
+        if relation is None:
+            return False
+        payload = {
+            "from_key": get_instance_name() or "default",
+            "status": "rejected",
+            "permission": relation.permission,
+        }
+        try:
+            await self.instance_relations.client.send_relation_response(relation, payload)
+        except Exception as exc:
+            logger.warning("Instance relation reject callback failed: key={} error={}", key, exc)
+        return self.instance_relations.reject(key)
+
+    def rename_instance_relation(self, key: str, name: str) -> dict:
+        """更新 instance 关系备注。"""
+        relation = self.instance_relations.rename(key, name)
+        return relation.to_dict() | {"key": relation.key}
+
+    async def send_instance_message(self, key: str, message: str) -> dict:
+        """向另一个 instance 发送聊天消息。"""
+        relation = self.instance_relations.require_permission(key, "chat")
+        payload = {
+            "from_key": get_instance_name() or "default",
+            "content": str(message or "").strip(),
+        }
+        if not payload["content"]:
+            raise ValueError("message content cannot be empty")
+        return await self.instance_relations.client.send_message(relation, payload)
+
+    async def receive_instance_relation_request(self, payload: dict) -> dict:
+        """处理其它 instance 发来的关系申请。"""
+        key = str(payload.get("from_key") or "").strip().lower()
+        url = str(payload.get("from_url") or "").strip().rstrip("/")
+        token = str(payload.get("from_token") or "").strip()
+        current = self.instance_relations.get_relation(key)
+        relation = self.instance_relations.upsert_pending(key=key, url=url, token=token)
+        if current is None or current.status == "pending":
+            await self.instance_relations.notify_relation_request(relation.key)
+        return {"ok": True, "status": relation.status, "key": relation.key}
+
+    async def receive_instance_relation_response(self, payload: dict) -> dict:
+        """处理其它 instance 发来的关系确认结果。"""
+        key = str(payload.get("from_key") or "").strip().lower()
+        status = str(payload.get("status") or "").strip()
+        permission = str(payload.get("permission") or "chat").strip()
+        relation = self.instance_relations.get_relation(key)
+        if relation is None:
+            from_url = str(payload.get("from_url") or "").strip().rstrip("/")
+            from_token = str(payload.get("from_token") or "").strip()
+            if from_url and from_token:
+                relation = self.instance_relations.find_relation_by_endpoint(from_url, from_token)
+                if relation is None:
+                    relation = self.instance_relations.upsert_pending(
+                        key=key,
+                        url=from_url,
+                        token=from_token,
+                    )
+            else:
+                raise ValueError(f"instance relation not found: {key}")
+        if status in {"friend", "trusted"}:
+            relation.status = "trusted" if status == "trusted" or permission == "all" else "friend"
+            relation.permission = self.instance_relations.normalize_permission(permission)
+            relation.updated_at_ms = int(time.time() * 1000)
+            self.instance_relations.store.put(relation)
+            await self.instance_relations.notify_relation_accepted(relation.key)
+            return {"ok": True, "status": relation.status, "key": relation.key}
+        if status == "rejected":
+            self.instance_relations.reject(relation.key)
+            return {"ok": True, "status": "rejected", "key": relation.key}
+        raise ValueError("invalid relation response status")
+
+    async def receive_instance_message(self, payload: dict) -> dict:
+        """处理其它 instance 发来的聊天消息。"""
+        key = str(payload.get("from_key") or "").strip().lower()
+        content = str(payload.get("content") or "").strip()
+        if not content:
+            raise ValueError("content is required")
+        relation = self.instance_relations.require_permission(key, "chat")
+        session_key = f"instance:{relation.key}"
+        result = await self.agent_loop.process_direct_result(
+            content,
+            session_key=session_key,
+            channel="instance",
+            chat_id=relation.key,
+            sender_id=f"instance:{relation.key}",
+            metadata={
+                "_session_id": session_key,
+                "_actor": "instance",
+                "_instance_relation_key": relation.key,
+            },
+        )
+        return {
+            "ok": True,
+            "session_id": result.session_key,
+            "content": result.final_content,
+            "stop_reason": result.stop_reason,
+        }
 
     def interrupt_session(
         self,
@@ -654,6 +834,7 @@ class NomiRuntime:
         self.state.transcription_provider = components.transcription_provider
         self.state.agent_loop = components.agent_loop
         self.state.agent_loop.set_reminder_consumers(self.state.reminder_consumers or set())
+        self._bind_instance_relation_runtime()
 
         if was_running:
             await self.lifecycle.start()
@@ -1243,6 +1424,36 @@ class NomiRuntime:
             transcription_provider=transcription_provider,
             agent_loop=agent_loop,
         )
+
+    def _bind_instance_relation_runtime(self) -> None:
+        """绑定 instance 关系管理器和可用工具。"""
+        tasks = getattr(self.state.agent_loop, "tasks", None)
+        notification = NotificationService(tasks) if tasks is not None else None
+        self.instance_relations = InstanceRelationManager(notification=notification)
+        self._register_instance_tools()
+
+    def _register_instance_tools(self) -> None:
+        """把 instance 关系工具注册到当前 AgentLoop。"""
+        tools = getattr(self.state.agent_loop, "tools", None)
+        if tools is None:
+            return
+        from nomi.agent.tools.instance_relations import (
+            InstanceInviteCodeTool,
+            InstanceInviteTool,
+            InstanceRelationAcceptTool,
+            InstanceRelationListTool,
+            InstanceRelationRejectTool,
+            InstanceRelationRenameTool,
+            InstanceSendMessageTool,
+        )
+
+        tools.register(InstanceInviteCodeTool(self))
+        tools.register(InstanceInviteTool(self))
+        tools.register(InstanceRelationListTool(self))
+        tools.register(InstanceRelationAcceptTool(self))
+        tools.register(InstanceRelationRejectTool(self))
+        tools.register(InstanceRelationRenameTool(self))
+        tools.register(InstanceSendMessageTool(self))
 
     def _load_runtime_config_from_disk(self) -> Config:
         """读取并解析当前活动配置文件。"""

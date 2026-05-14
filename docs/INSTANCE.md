@@ -37,7 +37,8 @@
 ├── skills/
 ├── history/
 ├── media/
-└── sessions/
+├── sessions/
+└── instance-relations.json
 ```
 
 目录初始化和路径派生分别在：
@@ -50,6 +51,7 @@
 - `sessions/` 不再挂在 `workspace/sessions`
 - `skills/` 不再固定指向全局 `~/.nomi/skills`
 - `history/` 和 `logs/` 也都是实例级
+- `instance-relations.json` 保存实例之间的好友关系和权限，详见 [INSTANCE_CHANNEL.md](./INSTANCE_CHANNEL.md)
 
 ---
 
@@ -90,6 +92,13 @@
 - `nomi instance log [name]`
 - `nomi instance status [name]`
 - `nomi instance services`
+- `nomi instance invite-code`
+- `nomi instance invite <key>`
+- `nomi instance relations`
+- `nomi instance accept <key>`
+- `nomi instance reject <key>`
+- `nomi instance rename <key> <name>`
+- `nomi instance send <key> <message>`
 
 命令定义在 [nomi/cli/commands/instance.py](../nomi/cli/commands/instance.py#L1-L209)。
 
@@ -99,6 +108,9 @@
 - `create` 会注册实例并创建标准目录
 - `start/stop/restart/log/status` 是唯一后台 runtime 管理入口
 - `services` 会汇总所有实例的 runtime 与 adapter 状态
+- `invite-code/invite/relations/accept/reject/rename/send` 管理实例之间的关系与基础聊天
+
+实例间关系和聊天通道见 [INSTANCE_CHANNEL.md](./INSTANCE_CHANNEL.md)。
 
 ---
 

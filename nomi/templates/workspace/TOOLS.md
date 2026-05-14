@@ -14,6 +14,7 @@
 - Shell / 程序执行：`exec`
 - Web 搜索与抓取：`web_search`、`web_fetch`
 - 自动任务：`task_create_after`、`task_create_at`、`task_create_daily`、`task_create_every`、`task_list`、`task_get`、`task_delete`、`task_enable`、`task_disable`、`task_update_instruction`、`task_reschedule_after`、`task_reschedule_at`、`task_reschedule_daily`、`task_reschedule_every`
+- 实例关系：`instance_invite_code`、`instance_invite`、`instance_relation_list`、`instance_relation_accept`、`instance_relation_reject`、`instance_relation_rename`、`instance_send_message`
 - MCP 工具：只有当前配置并连接成功时才会出现，不要默认它们一定可用
 
 ## 2. 文件和搜索工具的使用顺序
@@ -79,7 +80,20 @@
 - 不要用 `exec` 模拟定时：不要写 `sleep ... && ...`，不要用 `at`、`crontab`、`launchctl`、`schtasks`、`nohup`
 - 不要再使用旧工具名：`task_create`、`task_update`
 
-## 9. 一般习惯
+## 9. `instance_*`
+
+- 实例之间加好友、确认关系、备注和聊天时，优先使用 instance 工具，不要用 `exec` 拼 CLI 命令
+- 生成当前实例邀请码用 `instance_invite_code(public_url=...)`
+- 用对方邀请码发起好友申请用 `instance_invite(key=..., invite_code=...)`
+- 如果用户直接给了对方 URL 和 token，也可以用 `instance_invite(key=..., url=..., token=...)`
+- 查看关系列表用 `instance_relation_list()`
+- 同意好友申请用 `instance_relation_accept(key=..., permission=...)`，`permission` 可选 `chat`、`task`、`all`
+- 拒绝好友申请用 `instance_relation_reject(key=...)`
+- 给关系设置备注用 `instance_relation_rename(key=..., name=...)`
+- 给另一个实例发消息用 `instance_send_message(key=..., message=...)`
+- 当前已落地的是基础聊天关系；`task/all` 权限只是关系模型保留，不要声称已经能让对方创建任务、安装 skill 或修改 MCP
+
+## 10. 一般习惯
 
 - 优先最小工具，不要默认上 `exec`
 - 优先增量读取，不要一次性读取大文件或大目录

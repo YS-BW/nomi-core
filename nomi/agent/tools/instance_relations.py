@@ -1,0 +1,231 @@
+"""实例关系与实例通信工具。"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from nomi.agent.tools.base import Tool, tool_parameters
+from nomi.agent.tools.schema import StringSchema, tool_parameters_schema
+
+
+class _InstanceTool(Tool):
+    """封装 instance 工具共享依赖。"""
+
+    def __init__(self, runtime: Any) -> None:
+        """绑定当前 runtime。"""
+        self._runtime = runtime
+
+
+@tool_parameters(
+    tool_parameters_schema(
+        required=[],
+        public_url=StringSchema(
+            "当前 instance 对外可访问的 HTTP URL，例如 http://127.0.0.1:8765",
+            nullable=True,
+        ),
+    )
+)
+class InstanceInviteCodeTool(_InstanceTool):
+    """生成当前 instance 邀请码。"""
+
+    @property
+    def name(self) -> str:
+        """返回工具名。"""
+        return "instance_invite_code"
+
+    @property
+    def description(self) -> str:
+        """返回工具说明。"""
+        return "生成当前 Nomi instance 的邀请码，用于让另一个 instance 发起好友申请。"
+
+    @property
+    def read_only(self) -> bool:
+        """生成邀请码不修改状态。"""
+        return True
+
+    async def execute(self, public_url: str | None = None, **kwargs: Any) -> str:
+        """生成邀请码。"""
+        del kwargs
+        return self._runtime.build_instance_invite_code(public_url)
+
+
+@tool_parameters(
+    tool_parameters_schema(
+        required=["key"],
+        key=StringSchema("本地关系 key，例如 xmy", min_length=1),
+        invite_code=StringSchema("对方 instance 邀请码", nullable=True),
+        url=StringSchema("对方 instance HTTP URL", nullable=True),
+        token=StringSchema("对方 remote token", nullable=True),
+    )
+)
+class InstanceInviteTool(_InstanceTool):
+    """向另一个 instance 发起好友申请。"""
+
+    @property
+    def name(self) -> str:
+        """返回工具名。"""
+        return "instance_invite"
+
+    @property
+    def description(self) -> str:
+        """返回工具说明。"""
+        return "通过邀请码或 url/token 向另一个 Nomi instance 发起好友申请。"
+
+    async def execute(
+        self,
+        key: str,
+        invite_code: str | None = None,
+        url: str | None = None,
+        token: str | None = None,
+        **kwargs: Any,
+    ) -> str:
+        """发起好友申请。"""
+        del kwargs
+        await self._runtime.invite_instance(
+            key,
+            url=url,
+            token=token,
+            invite_code=invite_code,
+        )
+        return f"已向 {key} 发送好友申请。"
+
+
+@tool_parameters(tool_parameters_schema(required=[]))
+class InstanceRelationListTool(_InstanceTool):
+    """列出当前 instance 关系。"""
+
+    @property
+    def name(self) -> str:
+        """返回工具名。"""
+        return "instance_relation_list"
+
+    @property
+    def description(self) -> str:
+        """返回工具说明。"""
+        return "列出当前 Nomi instance 已登记的好友关系、备注、状态和权限。"
+
+    @property
+    def read_only(self) -> bool:
+        """关系列表是只读工具。"""
+        return True
+
+    async def execute(self, **kwargs: Any) -> str:
+        """执行关系列表读取。"""
+        del kwargs
+        relations = self._runtime.list_instance_relations()
+        if not relations:
+            return "当前没有 instance 关系。"
+        lines = ["当前 instance 关系："]
+        for item in relations:
+            label = item.get("name") or item["key"]
+            lines.append(
+                f"- {item['key']}（{label}）：{item['status']} / {item['permission']} / {item['url']}"
+            )
+        return "\n".join(lines)
+
+
+@tool_parameters(
+    tool_parameters_schema(
+        required=["key"],
+        key=StringSchema("关系 key，例如 xmy", min_length=1),
+        permission=StringSchema("授权等级", enum=["chat", "task", "all"], nullable=True),
+    )
+)
+class InstanceRelationAcceptTool(_InstanceTool):
+    """接受好友申请。"""
+
+    @property
+    def name(self) -> str:
+        """返回工具名。"""
+        return "instance_relation_accept"
+
+    @property
+    def description(self) -> str:
+        """返回工具说明。"""
+        return "接受一个 Nomi instance 好友申请，可指定权限 chat/task/all。"
+
+    async def execute(self, key: str, permission: str | None = None, **kwargs: Any) -> str:
+        """执行好友申请接受。"""
+        del kwargs
+        relation = await self._runtime.accept_instance_relation(key, permission or "chat")
+        return f"已接受 {relation['key']}，权限：{relation['permission']}。"
+
+
+@tool_parameters(
+    tool_parameters_schema(
+        required=["key"],
+        key=StringSchema("关系 key，例如 xmy", min_length=1),
+    )
+)
+class InstanceRelationRejectTool(_InstanceTool):
+    """拒绝好友申请。"""
+
+    @property
+    def name(self) -> str:
+        """返回工具名。"""
+        return "instance_relation_reject"
+
+    @property
+    def description(self) -> str:
+        """返回工具说明。"""
+        return "拒绝一个 Nomi instance 好友申请。"
+
+    async def execute(self, key: str, **kwargs: Any) -> str:
+        """执行好友申请拒绝。"""
+        del kwargs
+        await self._runtime.reject_instance_relation_async(key)
+        return f"已拒绝 {key}。"
+
+
+@tool_parameters(
+    tool_parameters_schema(
+        required=["key", "name"],
+        key=StringSchema("关系 key，例如 xmy", min_length=1),
+        name=StringSchema("备注名", min_length=1),
+    )
+)
+class InstanceRelationRenameTool(_InstanceTool):
+    """更新好友备注。"""
+
+    @property
+    def name(self) -> str:
+        """返回工具名。"""
+        return "instance_relation_rename"
+
+    @property
+    def description(self) -> str:
+        """返回工具说明。"""
+        return "给一个 Nomi instance 关系设置或更新备注名。"
+
+    async def execute(self, key: str, name: str, **kwargs: Any) -> str:
+        """执行备注更新。"""
+        del kwargs
+        relation = self._runtime.rename_instance_relation(key, name)
+        return f"已把 {relation['key']} 备注为 {relation['name']}。"
+
+
+@tool_parameters(
+    tool_parameters_schema(
+        required=["key", "message"],
+        key=StringSchema("目标关系 key，例如 xmy", min_length=1),
+        message=StringSchema("要发送给对方 instance 的消息", min_length=1),
+    )
+)
+class InstanceSendMessageTool(_InstanceTool):
+    """向另一个 instance 发送消息。"""
+
+    @property
+    def name(self) -> str:
+        """返回工具名。"""
+        return "instance_send_message"
+
+    @property
+    def description(self) -> str:
+        """返回工具说明。"""
+        return "向已成为好友且具备 chat 权限的另一个 Nomi instance 发送消息，并返回对方回复。"
+
+    async def execute(self, key: str, message: str, **kwargs: Any) -> str:
+        """发送 instance 消息。"""
+        del kwargs
+        result = await self._runtime.send_instance_message(key, message)
+        return str(result.get("content") or "")

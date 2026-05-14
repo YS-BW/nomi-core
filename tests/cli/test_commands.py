@@ -587,6 +587,99 @@ def test_instance_without_subcommand_shows_help() -> None:
     assert "log" in stripped
 
 
+def test_instance_invite_code_prints_runtime_code(monkeypatch) -> None:
+    """instance invite-code 应输出 runtime 生成的邀请码。"""
+    config = Config()
+    runtime = MagicMock()
+    runtime.build_instance_invite_code.return_value = "nomi://instance-invite?token=t"
+
+    monkeypatch.setattr("nomi.cli.commands.instance.load_runtime_config", lambda *_args, **_kwargs: config)
+    monkeypatch.setattr("nomi.cli.commands.instance.make_runtime", lambda loaded: runtime)
+
+    result = runner.invoke(app, ["instance", "invite-code", "--url", "http://example.test"])
+
+    assert result.exit_code == 0
+    assert "nomi://instance-invite?token=t" in _strip_ansi(result.stdout)
+    runtime.build_instance_invite_code.assert_called_once_with("http://example.test")
+
+
+def test_instance_relations_prints_table(monkeypatch) -> None:
+    """instance relations 应展示关系表。"""
+    config = Config()
+    runtime = MagicMock()
+    runtime.list_instance_relations.return_value = [
+        {
+            "key": "xmy",
+            "name": "小美",
+            "url": "http://127.0.0.1:8766",
+            "status": "friend",
+            "permission": "chat",
+        }
+    ]
+
+    monkeypatch.setattr("nomi.cli.commands.instance.load_runtime_config", lambda *_args, **_kwargs: config)
+    monkeypatch.setattr("nomi.cli.commands.instance.make_runtime", lambda loaded: runtime)
+
+    result = runner.invoke(app, ["instance", "relations"])
+
+    assert result.exit_code == 0
+    stripped = _strip_ansi(result.stdout)
+    assert "xmy" in stripped
+    assert "小美" in stripped
+    assert "friend" in stripped
+
+
+def test_instance_invite_from_code_calls_runtime(monkeypatch) -> None:
+    """instance invite --from-code 应解析邀请码并发起申请。"""
+    config = Config()
+    runtime = MagicMock()
+    runtime.invite_instance = AsyncMock(return_value={"ok": True})
+    code = (
+        "nomi://instance-invite?name=default&url=http%3A%2F%2F127.0.0.1%3A8766&token=t"
+    )
+
+    monkeypatch.setattr("nomi.cli.commands.instance.load_runtime_config", lambda *_args, **_kwargs: config)
+    monkeypatch.setattr("nomi.cli.commands.instance.make_runtime", lambda loaded: runtime)
+
+    result = runner.invoke(app, ["instance", "invite", "xmy", "--from-code", code])
+
+    assert result.exit_code == 0
+    runtime.invite_instance.assert_awaited_once_with(
+        "xmy",
+        url=None,
+        token=None,
+        invite_code=code,
+    )
+
+
+def test_instance_accept_reject_rename_send_call_runtime(monkeypatch) -> None:
+    """instance 关系操作命令应调用 runtime。"""
+    config = Config()
+    runtime = MagicMock()
+    runtime.accept_instance_relation = AsyncMock(return_value={"key": "xmy", "permission": "chat"})
+    runtime.reject_instance_relation_async = AsyncMock(return_value=True)
+    runtime.rename_instance_relation.return_value = {"key": "xmy", "name": "小美"}
+    runtime.send_instance_message = AsyncMock(return_value={"content": "pong"})
+
+    monkeypatch.setattr("nomi.cli.commands.instance.load_runtime_config", lambda *_args, **_kwargs: config)
+    monkeypatch.setattr("nomi.cli.commands.instance.make_runtime", lambda loaded: runtime)
+
+    accepted = runner.invoke(app, ["instance", "accept", "xmy", "--permission", "chat"])
+    rejected = runner.invoke(app, ["instance", "reject", "xmy"])
+    renamed = runner.invoke(app, ["instance", "rename", "xmy", "小美"])
+    sent = runner.invoke(app, ["instance", "send", "xmy", "ping"])
+
+    assert accepted.exit_code == 0
+    assert rejected.exit_code == 0
+    assert renamed.exit_code == 0
+    assert sent.exit_code == 0
+    runtime.accept_instance_relation.assert_awaited_once_with("xmy", "chat")
+    runtime.reject_instance_relation_async.assert_awaited_once_with("xmy")
+    runtime.rename_instance_relation.assert_called_once_with("xmy", "小美")
+    runtime.send_instance_message.assert_awaited_once_with("xmy", "ping")
+    assert "pong" in _strip_ansi(sent.stdout)
+
+
 def test_channel_enable_updates_config(monkeypatch) -> None:
     """channel enable 只更新配置，不启动独立 service。"""
     config = Config()

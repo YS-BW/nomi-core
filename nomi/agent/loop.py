@@ -9,23 +9,23 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Awaitable, Callable
 
 from nomi import __version__
-from nomi.agent.memory.autocompact import AutoCompact
-from nomi.agent.loop_runtime.background import BackgroundRuntime
 from nomi.agent.context.builder import ContextBuilder
-from nomi.agent.tools.bootstrap import register_default_tools
-from nomi.agent.loop_runtime.dispatch import DispatchRuntime
+from nomi.agent.execution.processor import DirectProcessResult, TurnProcessor
+from nomi.agent.execution.runner import AgentRunner
+from nomi.agent.execution.turn_journal import TurnJournalStore
 from nomi.agent.hook import AgentHook
-from nomi.agent.loop_runtime.state import LoopRuntimeState, SessionInterruptState
+from nomi.agent.loop_runtime.background import BackgroundRuntime
 from nomi.agent.loop_runtime.control import LoopControl, LoopMcpSupport
+from nomi.agent.loop_runtime.dispatch import DispatchRuntime
+from nomi.agent.loop_runtime.state import LoopRuntimeState, SessionInterruptState
+from nomi.agent.memory.autocompact import AutoCompact
 from nomi.agent.memory.consolidator import Consolidator
 from nomi.agent.memory.dream import Dream
 from nomi.agent.memory.profile import UserProfileService
 from nomi.agent.memory.store import MemoryStore
-from nomi.agent.execution.runner import AgentRunner
-from nomi.agent.execution.turn_journal import TurnJournalStore
 from nomi.agent.skills.registry import SkillRegistry
+from nomi.agent.tools.bootstrap import register_default_tools
 from nomi.agent.tools.registry import ToolRegistry
-from nomi.agent.execution.processor import DirectProcessResult, TurnProcessor
 from nomi.bus.events import InboundMessage, OutboundMessage
 from nomi.bus.queue import MessageBus
 from nomi.command import CommandContext, CommandRouter, register_builtin_commands
@@ -657,6 +657,8 @@ class AgentLoop:
         session_key: str = "cli:direct",
         channel: str = "cli",
         chat_id: str = "direct",
+        sender_id: str = "user",
+        metadata: dict | None = None,
         history_session_key: str | None = None,
         on_progress: Callable[[str], Awaitable[None]] | None = None,
         on_stream: Callable[[str], Awaitable[None]] | None = None,
@@ -669,6 +671,8 @@ class AgentLoop:
             session_key=session_key,
             channel=channel,
             chat_id=chat_id,
+            sender_id=sender_id,
+            metadata=metadata,
             history_session_key=history_session_key,
             on_progress=on_progress,
             on_stream=on_stream,

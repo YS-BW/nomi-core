@@ -1,3 +1,52 @@
+# Nomi 后续实现计划
+
+## 0. 当前优先级：Instance Channel 第一阶段
+
+本阶段目标是在 `nomi-core` 内实现 instance 之间的好友关系和基础聊天通道，不引入 `peer` 概念，不修改 `nomi-protocol`，不改 desktop。
+
+当前代码实现状态：代码和测试已完成，真实双实例 smoke 尚未执行。
+
+已完成：
+
+- 新增 `<instance-root>/instance-relations.json` 关系存储。
+- 新增 `InstanceRelationManager`，支持 `pending/friend/trusted` 状态和 `chat/task/all` 权限。
+- 新增 `NotificationService`，复用现有全局 reminder fanout 发送关系请求和关系通过通知。
+- 新增 core 内部 InstanceChannel HTTP 路由：
+  - `POST /v1/instance/relations/request`
+  - `POST /v1/instance/relations/response`
+  - `POST /v1/instance/messages`
+- 新增 `nomi instance invite-code/invite/relations/accept/reject/rename/send`。
+- 新增 Agent 工具：
+  - `instance_relation_list`
+  - `instance_relation_accept`
+  - `instance_relation_reject`
+  - `instance_relation_rename`
+  - `instance_send_message`
+- instance 消息进入 AgentLoop 时使用 `channel="instance"`、`sender_id="instance:<key>"`、`session_id="instance:<key>"`。
+- 补充 `docs/INSTANCE_CHANNEL.md`，并更新 `INSTANCE/REMOTE/TOOLS/README` 文档索引。
+
+当前边界：
+
+- InstanceChannel 共享 remote HTTP listener；接收方必须启用 remote。
+- 这三条 `/v1/instance/*` 路由是 core 内部实例通道，不进入 `nomi-protocol`。
+- 第一版不做自动发现、独立 service、独立端口、task_request、skill/MCP 授权执行。
+- 如果同一 key 已存在但 url/token 不一致，直接拒绝为关系冲突。
+
+已跑测试：
+
+```bash
+uv run python -m pytest tests/instance_channel/test_relations.py tests/runtime/test_remote_facade.py tests/remote/test_server.py tests/cli/test_commands.py -q
+uv run ruff check nomi/instance_channel nomi/agent/tools/instance_relations.py nomi/runtime/app.py tests/instance_channel/test_relations.py --select F401,F841,I
+```
+
+下一步：
+
+1. 运行更完整的 `compileall` 和相关测试。
+2. 用两个临时 instance root 做真实 invite/accept/send smoke。
+3. smoke 通过后再整理提交。
+
+---
+
 # Nomi Remote Protocol 全量 HTTP + SSE 重构计划
 
 > 本文件替换当前 `PLAN.md`，后续 remote/protocol/desktop 联调相关实现、测试、文档与验收均以这里为准。

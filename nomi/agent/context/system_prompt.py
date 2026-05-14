@@ -74,6 +74,8 @@ class SystemPromptBuilder:
             return render_template("CHANNEL_CLI.md", strip=True)
         if normalized == "weixin":
             return render_template("CHANNEL_WEIXIN.md", strip=True)
+        if normalized == "instance":
+            return render_template("CHANNEL_INSTANCE.md", strip=True)
         return ""
 
     @staticmethod
