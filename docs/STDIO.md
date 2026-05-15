@@ -1,112 +1,37 @@
-# 📡 Runtime Protocol
+# 📡 Runtime Protocol Helper
 
-这份文档只说明当前还保留在代码里的 runtime 协议辅助层 📡
+`STDIO.md` 记录的是当前代码里仍保留的 runtime 协议 helper。
 
-先说结论：
+它不是当前用户可见入口。现在没有正式暴露 `nomi stdio` 或旧的 `serve stdio` 主流程。
 
-- 当前用户可见 CLI 不暴露 `nomi stdio` 🚫
-- 也不暴露旧的 `serve stdio`
-- 但 runtime 里仍然保留了协议构造函数
+## 🌟 它现在是什么
 
-所以这部分现在更适合被理解成：
+当前这部分更适合理解为内部 helper：
 
-> 内部可复用的协议 helper，而不是正式产品入口。
+- 构造默认 session id。
+- 构造 ready/progress/delta/final/error 等事件 payload。
+- 给当前仍依赖 runtime protocol payload 的内部代码和测试复用。
 
----
+## 🚫 它不是什么
 
-## 代码位置
+它不是：
 
-- 协议 helper：[nomi/runtime/protocol.py](../nomi/runtime/protocol.py#L12-L99)
+- 正式 CLI 命令。
+- desktop remote 协议。
+- 当前 channel 协议。
+- 新集成方式。
 
----
+desktop 当前走的是 remote HTTP + SSE，见 [REMOTE.md](./REMOTE.md)。
 
-## 当前协议事件
+## 🧱 使用边界
 
-### session key
+- 不要把这里写成正式产品入口。
+- 它只作为内部 helper 维护，不承担兼容入口职责。
+- remote 协议能力由 `nomi-protocol` 维护，不能在这里私自扩展 desktop 接口。
 
-默认 session key 规则：
+## 🔎 相关代码
 
-- [nomi/runtime/protocol.py](../nomi/runtime/protocol.py#L12-L15)
-
-### ready
-
-```json
-{"type":"ready"}
-```
-
-构造函数：
-
-- [nomi/runtime/protocol.py](../nomi/runtime/protocol.py#L17-L20)
-
-### progress
-
-```json
-{
-  "type": "progress",
-  "session_id": "cli:direct",
-  "content": "...",
-  "tool_hint": false
-}
-```
-
-构造函数：
-
-- [nomi/runtime/protocol.py](../nomi/runtime/protocol.py#L22-L35)
-
-### delta
-
-```json
-{
-  "type": "delta",
-  "session_id": "cli:direct",
-  "content": "..."
-}
-```
-
-构造函数：
-
-- [nomi/runtime/protocol.py](../nomi/runtime/protocol.py#L37-L44)
-
-### stream_end
-
-```json
-{
-  "type": "stream_end",
-  "session_id": "cli:direct",
-  "resuming": false
-}
-```
-
-构造函数：
-
-- [nomi/runtime/protocol.py](../nomi/runtime/protocol.py#L46-L53)
-
-### message
-
-最终完整消息事件：
-
-- [nomi/runtime/protocol.py](../nomi/runtime/protocol.py#L55-L68)
-
-### error
-
-- [nomi/runtime/protocol.py](../nomi/runtime/protocol.py#L71-L76)
-
-### interrupt_result
-
-- [nomi/runtime/protocol.py](../nomi/runtime/protocol.py#L79-L85)
-
-### reset_done
-
-- [nomi/runtime/protocol.py](../nomi/runtime/protocol.py#L88-L90)
-
-### status_result
-
-- [nomi/runtime/protocol.py](../nomi/runtime/protocol.py#L93-L99)
-
----
-
-## 当前定位
-
-如果以后需要重新暴露脚本化入口，这层协议 helper 可以继续复用。
-
-但在当前版本里，这部分不能被文档写成“正式可用命令面”，否则就会和当前 CLI 事实冲突。
+| 代码 | 说明 |
+|---|---|
+| [nomi/runtime/protocol.py](../nomi/runtime/protocol.py#L1-L8) | runtime 协议 helper |
+| [nomi/remote/server.py](../nomi/remote/server.py#L69-L186) | 当前正式 remote HTTP + SSE 服务 |

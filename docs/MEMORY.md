@@ -1,269 +1,99 @@
 # 🧠 Memory
 
-Nomi 的记忆系统现在早就不只是一个 `MEMORY.md` 文件了 🧠
+Memory 是 Nomi 的长期记忆系统。它不只是一个文件，而是由会话历史、长期记忆、Dream 整理和用户画像候选共同组成。
 
-它更像一套“分层记忆系统”：
+Session 负责“这条对话刚聊了什么”；Memory 负责“长期应该记住什么”。
 
-当前主要有四块：
+## 🌟 Memory 包含什么
 
-1. session 历史
-2. 长期记忆文件
-3. Dream 整理
-4. 用户画像候选与确认
+当前主要有四层：
 
----
+- Session 历史：每条会话的短期上下文。
+- `MEMORY.md`：长期记忆正文。
+- Dream：对长期记忆和人格文件做整理。
+- `USER.md`：用户画像和偏好。
 
-## 目录结构
+## 📁 文件位置
 
-默认工作区下，和记忆相关的文件大致是：
+默认工作区下：
 
 ```text
-~/.nomi/workspace/
+<instance-root>/workspace/
 ├── SOUL.md
 ├── USER.md
-├── memory/
-│   ├── MEMORY.md
-│   ├── history.jsonl
-│   ├── user_profile_candidates.json
-│   ├── .cursor
-│   └── .dream_cursor
-└── sessions/
+└── memory/
+    ├── MEMORY.md
+    ├── history.jsonl
+    ├── user_profile_candidates.json
+    ├── .cursor
+    └── .dream_cursor
 ```
 
-记忆文件 owner 是 [nomi/agent/memory/store.py](../nomi/agent/memory/store.py#L110-L360)。
-
----
-
-## 第一层：Session 历史
-
-每个对话线程都有自己的 session 文件，保存在：
+会话历史在：
 
 ```text
-~/.nomi/workspace/sessions/*.jsonl
+<instance-root>/sessions/
 ```
 
-由 `SessionManager` 管理：
+## 👤 用户画像
 
-- 获取或创建 session
-- 从 JSONL 读取
-- 写回 JSONL
-- 维护 `last_consolidated`
+当用户表达长期偏好时，Nomi 会尝试抽取用户画像候选。
 
-见 [nomi/session/manager.py](../nomi/session/manager.py#L107-L219)。
-
-### 会话 key
-
-当前默认会话 key 规则：
-
-- CLI：`cli:direct`
-- 微信：`weixin:<chat_id>`
-- Cron：根据 job payload 派生
-
-`InboundMessage.session_key` 见 [nomi/bus/events.py](../nomi/bus/events.py#L21-L25)。
-
----
-
-## 第二层：长期记忆文件
-
-### `memory/MEMORY.md`
-
-长期事实记忆，适合放：
-
-- 项目长期背景
-- 多轮对话后沉淀出的稳定信息
-- 以后仍有价值的事实
-
-读写接口：
-
-- `read_memory()`：[nomi/agent/memory/store.py](../nomi/agent/memory/store.py#L168-L177)
-- `write_memory()`：[nomi/agent/memory/store.py](../nomi/agent/memory/store.py#L179-L188)
-
-### `SOUL.md`
-
-Nomi 的行为风格和自我约束。  
-这更像“AI 的人格与行事原则”，而不是用户画像。
-
-读写接口：
-
-- `read_soul()`：[nomi/agent/memory/store.py](../nomi/agent/memory/store.py#L190-L199)
-- `write_soul()`：[nomi/agent/memory/store.py](../nomi/agent/memory/store.py#L201-L210)
-
-### `USER.md`
-
-只存“已确认”的用户画像，不存临时任务。
-
-当前 `USER.md` 已经被结构化成机器可维护文档，由 MemoryStore 负责：
-
-- 初始化默认结构
-- 把结构渲染回 Markdown
-- 按字段应用候选变更
-
-相关代码：
-
-- 文档读取：[nomi/agent/memory/store.py](../nomi/agent/memory/store.py#L364-L388)
-- 文档渲染：[nomi/agent/memory/store.py](../nomi/agent/memory/store.py#L388-L449)
-- 默认结构：[nomi/agent/memory/store.py](../nomi/agent/memory/store.py#L749-L781)
-
----
-
-## 第三层：历史归档
-
-`memory/history.jsonl` 不是 session 原始历史，而是长期归档历史。
-
-它主要服务两件事：
-
-- Consolidator 做历史压缩
-- Dream 读取“最近还没被整理掉的历史”
-
-system prompt 里“最近历史”段也是从这里来的：
-
-- [nomi/agent/context/system_prompt.py](../nomi/agent/context/system_prompt.py#L109-L118)
-
----
-
-## Consolidator 与 AutoCompact
-
-### Consolidator
-
-`Consolidator` 负责：
-
-- 根据 token 窗口判断会话是否太长
-- 把旧消息归档
-- 维护 `last_consolidated`
-
-### AutoCompact
-
-`AutoCompact` 负责：
-
-- 根据空闲时间自动触发 compact
-
-对应装配：
-
-- [nomi/agent/loop.py](../nomi/agent/loop.py#L168-L182)
-
----
-
-## Dream
-
-Dream 是当前主链路里的“长期记忆整理器”。
-
-它的职责是：
-
-- 读取当前长期记忆和历史
-- 用模型分析哪些东西值得写回长期记忆
-- 通过受限工具链修改 `SOUL.md`、`USER.md`、`MEMORY.md`
-- 把这些文件的变更做 Git 版本记录
-
-装配在 [nomi/agent/loop.py](../nomi/agent/loop.py#L183-L187)。
-
-### Dream 跟踪哪些文件
-
-当前 GitStore 只跟踪：
-
-- `SOUL.md`
-- `USER.md`
-- `memory/MEMORY.md`
-
-见 [nomi/agent/memory/store.py](../nomi/agent/memory/store.py#L135-L138)。
-
-### Dream 触发方式
-
-- 用户显式执行 `/dream`
-- 后台逻辑触发 `trigger_dream_background()`
-
-命令入口：[nomi/command/handlers/dream.py](../nomi/command/handlers/dream.py#L118-L133)
-
----
-
-## 用户画像候选
-
-这部分是当前记忆系统里最容易理解错、也最容易文档写偏的地方 ⚠️
-
-### 当前真实行为
-
-Nomi 现在不是“聊完一句话就偷偷改 `USER.md`” 🚫
-
-真实流程是：
-
-1. 识别本轮是否值得做画像抽取
-2. 调用主 provider 做候选抽取
-3. 把候选写入 `memory/user_profile_candidates.json`
-4. 回复结尾附带提醒
-5. 用户确认后才真正写入 `USER.md`
-
-### 候选文件
+例如：
 
 ```text
-~/.nomi/workspace/memory/user_profile_candidates.json
+以后你回答我直接一点。
+我常用 Python 和 TypeScript。
+我不喜欢太长的解释。
 ```
 
-对应字段结构见：
+这类内容不会直接写入 `USER.md`，而是先变成候选，再由用户确认。
 
-- `UserProfileCandidate`：[nomi/agent/memory/store.py](../nomi/agent/memory/store.py#L66-L108)
+用户可以：
 
-### 候选状态
+```text
+记住。
+不要记。
+/user-review
+/user-apply <id>
+/user-reject <id>
+```
 
-当前状态包括：
+## 🌙 Dream
 
-- `pending`
-- `applied`
-- `rejected`
-- `superseded`
+Dream 是手动触发的记忆整理能力。
 
-### 候选抽取
+常用命令：
 
-由 `UserProfileService.extract_candidates()` 完成：
+```text
+/dream
+/dream-log
+/dream-restore
+```
 
-- [nomi/agent/memory/profile.py](../nomi/agent/memory/profile.py#L111-L172)
+Dream 会整理 `SOUL.md`、`USER.md`、`memory/MEMORY.md`，并通过内部 GitStore 保留可回滚历史。
 
-### 提醒生成
+## 🧠 和 Context 的关系
 
-- [nomi/agent/memory/profile.py](../nomi/agent/memory/profile.py#L174-L199)
+每轮调用模型时，ContextBuilder 会读取长期记忆和用户画像，把它们注入 system prompt。
 
-### 快捷确认
+这让模型在不同会话里也能知道用户长期偏好。
 
-当当前 session 下确实有待确认候选，且用户下一条是短确认语句时，会直接命中快捷处理：
+## 🧱 边界
 
-- `记住`
-- `更新`
-- `可以记`
-- `不要记`
-- `忽略`
+- Nomi 不应该把临时安排、当天情绪、一次性提醒写进长期画像。
+- 用户画像候选需要用户确认。
+- 清空 session 不等于清空长期记忆。
+- Dream 是整理，不是任意重写用户事实。
 
-逻辑见 [nomi/agent/memory/profile.py](../nomi/agent/memory/profile.py#L217-L234)。
+## 🔎 相关代码
 
-### 命令确认
-
-还支持这些显式命令：
-
-- `/user-review`
-- `/user-apply <id>`
-- `/user-reject <id>`
-- `/user-show`
-
-命令处理见 [nomi/command/handlers/user_profile.py](../nomi/command/handlers/user_profile.py#L9-L66)。
-
----
-
-## 当前主链路怎么接入画像
-
-用户画像不是一个“边缘 feature”，它现在已经接入单轮处理流程。
-
-关键接入点：
-
-- quick action 检测：[nomi/agent/execution/processor.py](../nomi/agent/execution/processor.py#L282-L312)
-- 对话后抽取提醒：[nomi/agent/execution/processor.py](../nomi/agent/execution/processor.py#L390-L402)
-- reminder 构造：[nomi/agent/execution/processor.py](../nomi/agent/execution/processor.py#L462-L482)
-
----
-
-## 当前边界
-
-记忆层里几类 owner 要分清：
-
-- `MemoryStore`：文件事实与读写
-- `UserProfileService`：画像候选抽取 / 提醒 / 确认策略
-- `Dream`：长期记忆整理
-- `Consolidator`：session 压缩与归档
-
-不要把它们重新揉成一个“超级记忆类”。
+| 代码 | 说明 |
+|---|---|
+| [nomi/agent/memory/store.py](../nomi/agent/memory/store.py#L110-L180) | MemoryStore 文件入口 |
+| [nomi/agent/memory/profile.py](../nomi/agent/memory/profile.py#L87-L230) | 用户画像候选抽取和提醒 |
+| [nomi/agent/memory/dream.py](../nomi/agent/memory/dream.py#L1-L202) | Dream 整理 |
+| [nomi/agent/memory/consolidator.py](../nomi/agent/memory/consolidator.py#L1-L272) | 会话归档整理 |
+| [nomi/agent/memory/autocompact.py](../nomi/agent/memory/autocompact.py#L1-L158) | 自动压缩 |
+| [nomi/command/handlers/user_profile.py](../nomi/command/handlers/user_profile.py#L1-L66) | 用户画像 slash 命令 |
+| [nomi/command/handlers/dream.py](../nomi/command/handlers/dream.py#L1-L160) | Dream slash 命令 |

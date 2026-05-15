@@ -1,0 +1,118 @@
+<svg width="1400" height="860" viewBox="0 0 1400 860" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1400" y2="860" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0F141B"/>
+      <stop offset="1" stop-color="#131B24"/>
+    </linearGradient>
+    <linearGradient id="panelBlue" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#D9E9FF"/>
+      <stop offset="1" stop-color="#B8D6FF"/>
+    </linearGradient>
+    <linearGradient id="panelCream" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#FFF0C6"/>
+      <stop offset="1" stop-color="#FFD99A"/>
+    </linearGradient>
+    <linearGradient id="panelPink" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#FFD6DF"/>
+      <stop offset="1" stop-color="#FFB9C8"/>
+    </linearGradient>
+    <linearGradient id="panelPurple" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#EFE2FF"/>
+      <stop offset="1" stop-color="#D9C0FF"/>
+    </linearGradient>
+    <linearGradient id="panelDog" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#F2D2B0"/>
+      <stop offset="1" stop-color="#D59B66"/>
+    </linearGradient>
+    <filter id="shadow" x="-20" y="-20" width="1440" height="900" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="10"/>
+      <feGaussianBlur stdDeviation="18"/>
+      <feComposite in2="hardAlpha" operator="out"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.04 0 0 0 0 0.07 0 0 0 0 0.12 0 0 0 0.30 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow" result="shape"/>
+    </filter>
+    <marker id="arrowBlue" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="10" markerHeight="10" orient="auto-start-reverse">
+      <path d="M0 0L12 6L0 12V0Z" fill="#A8C9FF"/>
+    </marker>
+    <marker id="arrowGold" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="10" markerHeight="10" orient="auto-start-reverse">
+      <path d="M0 0L12 6L0 12V0Z" fill="#FFD98D"/>
+    </marker>
+    <marker id="arrowPink" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="10" markerHeight="10" orient="auto-start-reverse">
+      <path d="M0 0L12 6L0 12V0Z" fill="#FFC0CE"/>
+    </marker>
+    <marker id="arrowPurple" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="10" markerHeight="10" orient="auto-start-reverse">
+      <path d="M0 0L12 6L0 12V0Z" fill="#D4BEFF"/>
+    </marker>
+  </defs>
+
+  <rect width="1400" height="860" fill="url(#bg)"/>
+
+  <text x="48" y="74" fill="#F5F7FA" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="56" font-weight="800">🐶 Architecture</text>
+  <path d="M48 104H1352" stroke="#2A3542" stroke-width="3"/>
+
+  <g filter="url(#shadow)">
+    <rect x="70" y="184" width="278" height="428" rx="28" fill="url(#panelBlue)"/>
+    <rect x="74" y="188" width="270" height="420" rx="24" stroke="#EEF5FF" stroke-opacity="0.9" stroke-width="2"/>
+  </g>
+  <text x="128" y="254" fill="#1B2430" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="34" font-weight="700">Chat Entrances</text>
+  <circle cx="209" cy="348" r="46" fill="#E6F0FF"/>
+  <text x="177" y="357" fill="#2B4250" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="38">🖥️</text>
+  <text x="147" y="430" fill="#1B2430" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="28" font-weight="600">Desktop</text>
+  <circle cx="209" cy="492" r="46" fill="#E6F0FF"/>
+  <text x="178" y="503" fill="#2B4250" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="36">💻</text>
+  <text x="173" y="574" fill="#1B2430" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="28" font-weight="600">CLI</text>
+  <circle cx="209" cy="636" r="46" fill="#E6F0FF"/>
+  <text x="177" y="646" fill="#2B4250" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="36">💬</text>
+  <text x="151" y="718" fill="#1B2430" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="28" font-weight="600">Weixin</text>
+
+  <g filter="url(#shadow)">
+    <rect x="450" y="200" width="240" height="150" rx="28" fill="url(#panelCream)"/>
+    <rect x="750" y="200" width="240" height="150" rx="28" fill="url(#panelPink)"/>
+    <rect x="450" y="430" width="240" height="150" rx="28" fill="url(#panelDog)"/>
+    <rect x="750" y="430" width="240" height="150" rx="28" fill="#FFDAB5"/>
+    <rect x="1090" y="226" width="250" height="280" rx="28" fill="url(#panelPurple)"/>
+  </g>
+
+  <text x="520" y="258" fill="#332819" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="34">💌</text>
+  <text x="512" y="314" fill="#332819" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="34" font-weight="700">Message</text>
+
+  <text x="819" y="258" fill="#4A2730" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="34">💬</text>
+  <text x="803" y="314" fill="#4A2730" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="34" font-weight="700">Response</text>
+
+  <text x="523" y="486" fill="#4A2E1B" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="34">🐶</text>
+  <text x="493" y="542" fill="#4A2E1B" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="34" font-weight="700">AI Agent</text>
+
+  <text x="826" y="486" fill="#55351D" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="34">🧰</text>
+  <text x="823" y="542" fill="#55351D" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="34" font-weight="700">Tools</text>
+
+  <text x="1164" y="286" fill="#46335F" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="38" font-weight="700">Context</text>
+  <rect x="1130" y="344" width="92" height="100" rx="22" fill="#E8D8FF"/>
+  <rect x="1240" y="344" width="92" height="100" rx="22" fill="#D9B5FF"/>
+  <text x="1158" y="402" fill="#46335F" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="34">🧠</text>
+  <text x="1141" y="472" fill="#46335F" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="24" font-weight="600">Memory</text>
+  <text x="1267" y="402" fill="#46335F" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="34">✨</text>
+  <text x="1267" y="472" fill="#46335F" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="24" font-weight="600">Skills</text>
+
+  <path d="M348 308H432" stroke="#A8C9FF" stroke-width="14" stroke-linecap="round" marker-end="url(#arrowBlue)"/>
+  <path d="M348 518H432" stroke="#A8C9FF" stroke-width="14" stroke-linecap="round" marker-end="url(#arrowBlue)"/>
+  <path d="M348 650H432" stroke="#A8C9FF" stroke-width="14" stroke-linecap="round" marker-end="url(#arrowBlue)"/>
+
+  <path d="M570 356V412" stroke="#FFD98D" stroke-width="14" stroke-linecap="round" marker-end="url(#arrowGold)"/>
+  <path d="M690 506H738" stroke="#F6B58E" stroke-width="14" stroke-linecap="round" marker-end="url(#arrowPink)"/>
+  <path d="M870 430V374" stroke="#FFC0CE" stroke-width="14" stroke-linecap="round" marker-end="url(#arrowPink)"/>
+
+  <path d="M990 500H1074" stroke="#D4BEFF" stroke-width="14" stroke-linecap="round" marker-end="url(#arrowPurple)"/>
+  <path d="M1130 488V560H930" stroke="#D4BEFF" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowPurple)"/>
+  <path d="M1130 372V314H990" stroke="#D4BEFF" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowPurple)"/>
+
+  <path d="M950 176C878 112 734 104 640 162" stroke="#FFE39C" stroke-width="12" stroke-linecap="round" marker-end="url(#arrowGold)"/>
+  <path d="M620 606C722 672 850 670 936 594" stroke="#F6C1A4" stroke-width="12" stroke-linecap="round" marker-end="url(#arrowPink)"/>
+
+  <text x="640" y="408" fill="#2D3642" fill-opacity="0.32" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="34" font-weight="600">Nomi Agent Loop</text>
+
+  <text x="56" y="768" fill="#F1F5F8" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="28" font-weight="600">Nomi keeps the assistant path simple:</text>
+  <text x="56" y="816" fill="#D6DEE5" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="26">messages come from desktop, CLI, or Weixin; the AI agent decides when to use tools; memory and skills only appear when they help the conversation.</text>
+</svg>

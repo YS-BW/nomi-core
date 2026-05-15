@@ -1,252 +1,160 @@
-# 🏗️ Architecture
+# 🏗️ 整体架构
 
-Nomi 当前的整体结构可以概括成一句话：
+Nomi 当前的架构可以概括成一句话：
 
-> 一个统一的进程内 runtime，承载一个真实的 Agent 主链路；CLI 和外部 channel 都只是这个主链路的不同入口。⚙️🤖
+> 一个 instance 对应一个统一 runtime，所有入口都把消息交给同一条 Agent 主链路处理。
 
-如果只想先抓重点，可以把它想成：
+入口可以有多个：CLI、desktop remote、微信 channel、instance channel。
+但真正持有 session、provider、tools、task scheduler、message bus 的，是同一个 instance runtime。
 
-> “前面有很多入口，但后面其实都汇到同一台发动机里。” 🚇
-
----
-
-## 一级模块分工
-
-| 模块 | 职责 |
-|---|---|
-| `nomi/cli` | 用户命令入口、交互循环、终端渲染 |
-| `nomi/runtime` | runtime 装配、生命周期、对外控制 API |
-| `nomi/agent` | Agent 主链路、上下文、执行、记忆、tools、skills |
-| `nomi/channel` | 单入口外部 channel 子系统 |
-| `nomi/providers` | provider 注册表、解析、后端适配 |
-| `nomi/config` | 配置模型、加载、路径规则 |
-| `nomi/command` | slash 命令路由和 handlers |
-| `nomi/session` | 会话持久化 |
-| `nomi/cron` | 应用内调度 |
-| `nomi/bus` | 入站 / 出站消息总线 |
-| `nomi/templates` | prompt 模板和工作区模板 |
-| `nomi/utils` | 低层辅助工具 |
-
-如果只看感觉，可以这么理解：
-
-- `cli` 是门口 🚪
-- `runtime` 是发动机 ⚙️
-- `agent` 是大脑 🧠
-- `channel` 是外部接线口 🔌
-
----
-
-## 当前主链路
-
-### CLI 入口
+## 🌟 现在的系统长什么样
 
 ```text
-nomi / nomi agent
+InstanceRuntimeService
   ↓
 NomiRuntime
+  ├─ MessageBus
+  ├─ AgentLoop
+  ├─ SessionManager
+  ├─ Provider
+  ├─ ToolRegistry
+  ├─ TaskRunner / CronService
+  ├─ RemoteAdapter
+  ├─ WeixinChannel
+  └─ InstanceChannel
+```
+
+这意味着：
+
+- CLI、desktop、微信、instance 消息都会进入同一个 runtime。
+- 同一实例只有一套 session 和任务调度状态。
+- remote 和 channel 不再各自创建独立 runtime。
+- provider reload 后，同一实例内所有入口都会使用新的 provider。
+
+## 🚪 入口层
+
+Nomi 当前主要有四类入口：
+
+| 入口 | 用途 |
+|---|---|
+| CLI | 本地终端对话、实例管理、配置操作 |
+| Remote | 给 desktop 使用的 HTTP + SSE adapter |
+| Weixin Channel | 微信收发消息入口 |
+| Instance Channel | 两个 Nomi 实例之间的关系和聊天通道 |
+
+这些入口不应该各自保存一份任务、会话或 provider 真相。它们只负责把消息带进 runtime，或者把 runtime 的结果带回用户所在的入口。
+
+## ⚙️ Runtime 层
+
+Runtime 是实例级运行主体。
+
+它负责：
+
+- 创建消息总线。
+- 创建主模型 provider。
+- 创建 AgentLoop。
+- 挂载 remote adapter。
+- 挂载当前启用的 channel adapter。
+- 管理启动、停止、重载和状态文件。
+
+用户看到的 `nomi instance start/run/stop/restart/status/services/log`，管理的就是这一层。
+
+## 🧠 Agent 层
+
+AgentLoop 是一次对话真正发生的地方。
+
+它负责：
+
+- 读取当前 session 历史。
+- 拼装 system prompt 和上下文。
+- 调用 provider。
+- 处理工具调用。
+- 保存新消息。
+- 写出最终回复。
+- 执行自动任务。
+
+从用户视角看，Nomi 像是在不同入口里说话；从内部看，都是 AgentLoop 在处理一轮消息。
+
+## 📨 消息流
+
+典型消息流如下：
+
+```text
+用户入口
+  ↓
+InboundMessage
   ↓
 MessageBus
   ↓
 AgentLoop
-  ↓
-TurnProcessor / AgentRunner
   ↓
 Provider / Tools
   ↓
-OutboundMessage
+Session 写入
   ↓
-CLI renderer
+OutboundMessage 或 SSE 事件
+  ↓
+用户入口收到回复
 ```
 
-关键入口：
+remote 和 channel 都是 adapter。它们可以监听 outbound，也可以通过 session event 实时更新 UI，但不应该成为新的 runtime owner。
 
-- CLI app：[nomi/cli/app.py](../nomi/cli/app.py#L25-L87)
-- agent 命令：[nomi/cli/commands/agent.py](../nomi/cli/commands/agent.py#L23-L128)
-- interactive loop：[nomi/cli/interactive.py](../nomi/cli/interactive.py#L54-L313)
-- runtime：[nomi/runtime/app.py](../nomi/runtime/app.py#L30-L332)
+## ⏰ 自动任务流
 
-### Channel 入口
+自动任务属于 instance 级能力：
 
 ```text
-nomi instance start
+用户创建任务
   ↓
-instance runtime service
+tasks.json
   ↓
-NomiRuntime
+TaskRunner 派生 cron/jobs.json
   ↓
-SingleChannelRunner
+CronService 到点触发
   ↓
-WeixinChannel
+AgentLoop 执行任务指令
   ↓
-MessageBus
+ReminderStore
   ↓
-AgentLoop
-  ↓
-MessageBus
-  ↓
-SingleChannelRunner outbound dispatch
-  ↓
-WeixinChannel reply
+remote / weixin / cli 按目标消费提醒
 ```
 
-关键入口：
+这里的关键语义是：`tasks.json` 是任务定义真源，`cron/jobs.json` 是派生触发状态。
 
-- CLI channel 命令：[nomi/cli/commands/channel.py](../nomi/cli/commands/channel.py#L24-L103)
-- channel usecases：[nomi/channel/service/usecases.py](../nomi/channel/service/usecases.py#L26-L74)
-- runner：[nomi/channel/service/runtime.py](../nomi/channel/service/runtime.py#L18-L127)
-- weixin adapter：[nomi/channel/adapters/weixin/channel.py](../nomi/channel/adapters/weixin/channel.py#L142-L837)
+## 🤝 Instance Channel
 
----
+Instance Channel 是挂在同一个 runtime 上的内部 HTTP 通道。
 
-## 当前 `agent/` 的内部结构
+它负责：
 
-`agent/` 不再是一个“大杂烩目录”，而是拆成了几个明确子域：
+- 生成一次性邀请码。
+- 接收好友申请。
+- 建立 relation token。
+- 按权限处理 instance 间消息。
+- 把 instance 聊天写入唯一的 `instance:<key>` 会话。
 
-```text
-nomi/agent/
-├── context/
-│   ├── builder.py
-│   ├── runtime_blocks.py
-│   ├── system_prompt.py
-│   └── message_codec.py
-├── execution/
-│   ├── runner.py
-│   ├── processor.py
-│   ├── messages.py
-│   ├── tokens.py
-│   └── tool_results.py
-├── loop_runtime/
-│   ├── state.py
-│   ├── control.py
-│   ├── dispatch.py
-│   └── background.py
-├── memory/
-│   ├── store.py
-│   ├── consolidator.py
-│   ├── dream.py
-│   ├── autocompact.py
-│   └── profile.py
-├── skills/
-├── tools/
-├── hook.py
-└── loop.py
-```
+它不新开 service，也不引入单独的 peer 概念。
 
-核心关系：
+## 🧱 边界
 
-- `loop.py` 是 façade
-- `execution/processor.py` 是单轮执行 owner
-- `execution/runner.py` 是 provider/tool loop owner
-- `context/` 只做消息和 prompt 组装
-- `memory/` 只做长期记忆与画像逻辑
+当前架构明确不做这些事：
 
-对应代码：
+- 不让 remote 和 channel 各自持有 runtime。
+- 不把 desktop 语义写进 core 私有分支。
+- 不让自动任务变成系统级后台调度器。
+- 不让 channel enable 后热插拔进运行中的 runtime。
+- 不把 instance channel 做成额外端口或独立服务。
 
-- AgentLoop 装配：[nomi/agent/loop.py](../nomi/agent/loop.py#L92-L213)
-- ContextBuilder：[nomi/agent/context/builder.py](../nomi/agent/context/builder.py#L20-L148)
-- TurnProcessor：[nomi/agent/execution/processor.py](../nomi/agent/execution/processor.py#L154-L560)
+## 🔎 相关代码
 
----
-
-## 当前 `channel/` 的内部结构
-
-`channel/` 现在有很明确的“框架层 / 平台层”分离：
-
-```text
-nomi/channel/
-├── base.py
-├── registry.py
-├── service/
-│   ├── state.py
-│   ├── runner.py
-│   ├── runtime.py
-│   ├── login.py
-│   └── usecases.py
-└── adapters/
-    ├── feishu/
-    └── weixin/
-        ├── channel.py
-        ├── streaming.py
-        └── filter.py
-```
-
-分工：
-
-- `registry.py`：解析当前 active channel kind
-- `service/login.py`：登录流程使用的极简 runtime stub
-- `service/runtime.py`：SingleChannelRunner + outbound 路由
-- `adapters/weixin/`：微信协议实现
-
-关键代码：
-
-- registry：[nomi/channel/registry.py](../nomi/channel/registry.py#L15-L99)
-- runtime runner：[nomi/channel/service/runtime.py](../nomi/channel/service/runtime.py#L18-L127)
-
----
-
-## 当前 `providers/` 的内部结构
-
-`providers/` 也已经收口成了三层：
-
-```text
-nomi/providers/
-├── base.py
-├── factory/
-│   ├── registry.py
-│   ├── resolution.py
-│   ├── build.py
-│   └── model_catalog.py
-├── backends/
-│   ├── openai_compat.py
-│   ├── anthropic.py
-│   └── azure_openai.py
-├── openai_compat/
-└── capabilities/
-```
-
-分工：
-
-- `factory/registry.py`：provider 规格表
-- `factory/resolution.py`：根据配置和模型名解析 provider
-- `factory/build.py`：真正实例化 backend
-- `backends/`：各类 provider 实现
-
----
-
-## 运行时目录
-
-当前运行时根目录默认是：
-
-```text
-~/.nomi
-```
-
-主要内容：
-
-```text
-~/.nomi/
-├── config.json
-├── history/
-├── logs/
-├── skills/
-├── weixin/
-└── workspace/
-```
-
-路径逻辑在 [nomi/config/paths.py](../nomi/config/paths.py#L10-L65)。
-
----
-
-## 设计边界
-
-当前架构里有几条边界是必须记住的：
-
-- `runtime` 负责装配和生命周期，不写 CLI 渲染逻辑
-- `cli` 负责参数解析和输出，不负责业务拼装
-- `agent/context` 不直接写记忆文件
-- `channel/service` 不写微信协议细节
-- `weixin` adapter 不负责全局互斥和 pid 状态
-- `MemoryStore` 只负责文件事实，不负责模型决策
-- `UserProfileService` 负责画像候选抽取和确认，不直接管理 CLI 命令
-
-如果后续改代码打破这些边界，维护成本会立刻升高。
+| 代码 | 说明 |
+|---|---|
+| [nomi/runtime/app.py](../nomi/runtime/app.py#L30-L99) | 创建统一 runtime |
+| [nomi/runtime/service/runner.py](../nomi/runtime/service/runner.py#L154-L220) | 启动 runtime、remote 和 channel adapter |
+| [nomi/agent/loop.py](../nomi/agent/loop.py#L87-L213) | AgentLoop 装配主链路 |
+| [nomi/bus/events.py](../nomi/bus/events.py#L8-L37) | inbound / outbound 消息模型 |
+| [nomi/bus/queue.py](../nomi/bus/queue.py#L8-L73) | runtime 内部消息总线 |
+| [nomi/tasks/runner.py](../nomi/tasks/runner.py#L34-L92) | 任务系统 owner |
+| [nomi/remote/server.py](../nomi/remote/server.py#L69-L186) | remote adapter |
+| [nomi/channel/service/runtime.py](../nomi/channel/service/runtime.py#L18-L117) | channel runner |
+| [nomi/instance_channel/manager.py](../nomi/instance_channel/manager.py#L1-L260) | instance 关系管理 |

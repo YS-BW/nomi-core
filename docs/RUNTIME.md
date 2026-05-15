@@ -1,177 +1,142 @@
 # ⚙️ Runtime
 
-`NomiRuntime` 是实例级 runtime service 持有的唯一进程内运行时入口。
+Runtime 是 Nomi 实例真正运行起来后的核心对象。它把 provider、消息总线、AgentLoop、remote、channel 和任务调度装到同一个进程里。
 
-它的作用不是“再套一层大框架” 🧱  
-而是把真正该统一的东西收口到一起：
+如果 instance 是“这个 Nomi 个体”，runtime 就是它正在运行的身体。
 
-- provider 装配 🤖
-- bus 创建 📨
-- `AgentLoop` 创建 🧠
-- transcription provider 创建 🎙️
-- 生命周期管理 ♻️
+## 🌟 Runtime 负责什么
 
----
+Runtime 负责：
 
-## 入口
+- 创建主模型 provider。
+- 创建语音转写 provider。
+- 创建 MessageBus。
+- 创建 AgentLoop。
+- 管理 session、tools、tasks、skills、memory。
+- 挂载 remote HTTP + SSE adapter。
+- 挂载当前启用的 channel adapter。
+- 支持 provider reload。
+- 暴露状态给 CLI 和 remote。
 
-核心类在 [nomi/runtime/app.py](../nomi/runtime/app.py#L30-L332)。
+## 🚀 怎么启动
 
-最重要的入口方法是：
+后台启动默认实例：
 
-- `NomiRuntime.from_config()`
-
-见 [nomi/runtime/app.py](../nomi/runtime/app.py#L45-L99)。
-
----
-
-## Runtime 装配了什么
-
-`from_config()` 当前会创建：
-
-- `MessageBus`
-- 主 LLM provider
-- transcription provider
-- `AgentLoop`
-- `RuntimeState`
-- `RuntimeLifecycle`
-
-装配代码：
-
-- provider build：[nomi/providers/factory/build.py](../nomi/providers/factory/build.py#L10-L72)
-- transcription build：[nomi/providers/capabilities/transcription.py](../nomi/providers/capabilities/transcription.py#L183-L199)
-- runtime state 绑定：[nomi/runtime/app.py](../nomi/runtime/app.py#L69-L99)
-
----
-
-## Runtime 对外 API
-
-### 单次调用
-
-```python
-await runtime.run_once(...)
-```
-
-这会直接走：
-
-```text
-NomiRuntime.run_once()
-  ↓
-AgentLoop.process_direct()
-```
-
-对应代码：[nomi/runtime/app.py](../nomi/runtime/app.py#L261-L289)
-
-### 后台启动
-
-```python
-await runtime.start()
-await runtime.wait()
-runtime.stop()
-await runtime.close()
-```
-
-这些方法统一委托给 `RuntimeLifecycle`：
-
-- `start()`：[nomi/runtime/app.py](../nomi/runtime/app.py#L290-L300)
-- `wait()`：[nomi/runtime/app.py](../nomi/runtime/app.py#L301-L310)
-- `stop()`：[nomi/runtime/app.py](../nomi/runtime/app.py#L312-L321)
-- `close()`：[nomi/runtime/app.py](../nomi/runtime/app.py#L323-L332)
-
-### 控制面 API
-
-Runtime 当前还暴露这些高层控制能力：
-
-- `interrupt_session()`
-- `reset_session()`
-- `get_status_snapshot()`
-- `trigger_dream()`
-- `list_cron_jobs()`
-- `remove_cron_job()`
-- `transcribe_audio()`
-- `get_dream_log()`
-- `restore_dream_version()`
-
----
-
-## Runtime 和 CLI 的边界
-
-当前结构里，runtime 已经不再持有 CLI 交互循环。
-
-这点很重要，因为它决定了 runtime 不是“会说话的终端层”，而是“下面真正干活的运行层” 🧱
-
-也就是说：
-
-- `run_interactive_loop()` 在 `nomi/cli/interactive.py`
-- `StreamRenderer` 在 `nomi/cli/stream.py`
-- `NomiRuntime` 只做进程内运行控制
-
-这是为了避免：
-
-- runtime 反向依赖 CLI
-- channel 入口不得不带着 CLI 依赖一起跑
-
----
-
-## Runtime 和 Instance Service 的关系
-
-当前后台运行主体是 instance runtime service，不再是 remote/channel 各自启动一套 runtime。
-
-链路是：
-
-```text
+```bash
 nomi instance start
-  ↓
-make_runtime(config)
-  ↓
-NomiRuntime
-  ↓
-RemoteServer / SingleChannelRunner
 ```
 
-所以：
+前台运行默认实例：
 
-- 同一实例只持有一套 agent / session / memory / provider / task / bus
-- remote 和 channel 只是挂载在这套 runtime 上的 adapter
-- provider reload 作用于唯一 runtime，后续 remote/channel/task 都使用同一套 provider
-
----
-
-## Runtime 和 Channel 的关系
-
-channel 子系统只负责外部渠道适配，不再独占 runtime 的 outbound 队列。
-
-当前 `SingleChannelRunner` 通过 `bus.subscribe_outbound()` 订阅出站消息，并只处理属于自己 channel 的消息。
-
-这保证 remote 和 channel 可以并列挂在同一个 runtime bus 上。
-
----
-
-## Runtime 和语音转写
-
-微信语音入站不直接在微信适配器里自己连模型，而是走 runtime 暴露的统一能力：
-
-```python
-await runtime.transcribe_audio(file_path)
+```bash
+nomi instance run
 ```
 
-这样做的好处是：
+重启：
 
-- channel 不需要知道转写 provider 的配置细节
-- 后续别的 channel 也能复用同一个能力
+```bash
+nomi instance restart
+```
 
-实现见 [nomi/runtime/app.py](../nomi/runtime/app.py#L207-L219)。
+停止：
 
----
+```bash
+nomi instance stop
+```
 
-## Runtime 当前不负责什么
+## 🧩 启动顺序
 
-这些事情不属于 runtime：
+实例启动时大致做这些事：
 
-- prompt_toolkit 交互
-- terminal 渲染
-- instance service 的 pid / log 管理
-- 用户命令解析
-- 微信协议实现
+```text
+读取 config.json
+  ↓
+创建 NomiRuntime
+  ↓
+启动 AgentLoop / task scheduler
+  ↓
+如果 remote.enabled=true，启动 RemoteServer
+  ↓
+如果 channel 已启用且登录态可用，启动 channel adapter
+  ↓
+写入 runtime-service 状态文件
+```
 
-这条边界目前是清晰的，文档和代码都应该保持这个事实。
+这保证同一实例里只有一个 runtime owner。
+
+## 🌐 Remote Adapter
+
+remote 是 desktop 的接入口。
+
+remote 启动条件：
+
+- `remote.enabled = true`
+- `remote.authToken` 非空
+- host/port 可绑定
+
+remote 不自己创建 runtime，只复用当前实例 runtime。
+
+## 💬 Channel Adapter
+
+channel 是微信这类外部入口。
+
+当前实际可用的是 `weixin`。它启动条件是：
+
+- `channel.kind = "weixin"`
+- 微信登录态存在
+- 实例 runtime 正在运行
+
+如果 channel 未登录，runtime 可以继续启动，只是 channel adapter 不运行。
+
+## ⏰ 自动任务
+
+TaskRunner 和 CronService 也挂在 runtime 里。
+
+这意味着：
+
+- desktop 创建的任务和微信创建的任务进入同一任务系统。
+- 任务触发由同一个 scheduler owner 执行。
+- 任务结果通过全局提醒投递给当前运行入口。
+
+## 🔁 Runtime Reload
+
+remote 可以触发 runtime reload，用来应用 provider 配置变化。
+
+reload 后，同一实例里的 remote、channel、task 执行都会使用新的 provider，而不是只有 desktop 侧生效。
+
+## 📄 状态文件
+
+运行时状态写在实例 root 的 `logs/` 目录下：
+
+```text
+runtime-service.pid
+runtime-service.json
+runtime-service.log
+```
+
+这些文件用于：
+
+- 查看实例是否运行。
+- 查看 remote/channel 是否挂载。
+- 查看 scheduler owner。
+- 停止或重启进程。
+
+## 🧱 边界
+
+- 一个实例 root 只允许一个 runtime 进程。
+- remote/channel 配置变化需要重启实例。
+- runtime 不是系统服务管理器；它只管理 Nomi 自己的进程和 adapter。
+- 如果旧 remote/channel 独立 service 还活着，新的 instance runtime 会拒绝启动。
+
+## 🔎 相关代码
+
+| 代码 | 说明 |
+|---|---|
+| [nomi/runtime/app.py](../nomi/runtime/app.py#L30-L99) | `NomiRuntime.from_config()` 装配入口 |
+| [nomi/runtime/app.py](../nomi/runtime/app.py#L1437-L1452) | runtime start 相关流程 |
+| [nomi/runtime/app.py](../nomi/runtime/app.py#L2009-L2035) | reload runtime |
+| [nomi/runtime/state.py](../nomi/runtime/state.py#L1-L42) | runtime 状态模型 |
+| [nomi/runtime/service/runner.py](../nomi/runtime/service/runner.py#L154-L220) | 前台 runtime service |
+| [nomi/runtime/service/state.py](../nomi/runtime/service/state.py#L1-L120) | service pid/json/log 状态 |
+| [nomi/remote/server.py](../nomi/remote/server.py#L85-L124) | remote adapter start/stop |
+| [nomi/channel/service/runtime.py](../nomi/channel/service/runtime.py#L18-L117) | channel runner |

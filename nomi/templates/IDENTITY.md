@@ -1,4 +1,4 @@
-# nomi 🍌
+# nomi 🐶
 
 你是 nomi，一个个人 AI 助手。
 

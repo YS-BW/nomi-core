@@ -1,41 +1,51 @@
-# 💬 Weixin Channel
+# 💬 微信 Channel
 
-Nomi 当前唯一真正跑起来的外部 channel 是微信 📱
+微信 channel 是 Nomi 当前实际可用的外部聊天入口。它把微信消息转换成 Nomi 的 inbound message，再把 Nomi 回复发回微信。
 
-它的定位不是“平台抽象演示”，而是真正可跑的个人微信入口。
+当前用户可见入口统一是 `nomi channel ...`，channel kind 是 `weixin`。
 
-当前用户可见入口统一是：
+## 🌟 微信入口能做什么
+
+微信 channel 支持：
+
+- 登录并保存微信状态。
+- 接收文本消息。
+- 接收图片、语音和文件。
+- 语音转写后进入 Agent。
+- 把 Agent 回复发送回微信。
+- 按 `<part>` 分段发送任务提醒。
+- 消费实例级全局提醒。
+
+## 🚀 启用方式
+
+启用微信配置：
 
 ```bash
-nomi channel ...
+nomi channel enable weixin
 ```
 
-但内部 active channel kind 目前还是 `weixin`。
+登录：
 
----
+```bash
+nomi channel login
+```
 
-## 相关代码
+重启实例使配置生效：
 
-### CLI 入口
+```bash
+nomi instance restart
+```
 
-- channel 命令组：[nomi/cli/commands/channel.py](../nomi/cli/commands/channel.py#L24-L103)
+查看状态：
 
-### Service 层
+```bash
+nomi channel status
+nomi instance status
+```
 
-- usecases：[nomi/channel/service/usecases.py](../nomi/channel/service/usecases.py#L1-L19)
-- 登录 runtime stub：[nomi/channel/service/login.py](../nomi/channel/service/login.py#L10-L50)
-- runtime runner：[nomi/channel/service/runtime.py](../nomi/channel/service/runtime.py#L18-L127)
+## ⚙️ 配置项
 
-### 平台实现
-
-- adapter：[nomi/channel/adapters/weixin/channel.py](../nomi/channel/adapters/weixin/channel.py#L142-L837)
-- streaming：[nomi/channel/adapters/weixin/streaming.py](../nomi/channel/adapters/weixin/streaming.py#L15-L195)
-
----
-
-## 配置结构
-
-当前微信配置在：
+微信配置位于 `config.json` 的 `channel.weixin`：
 
 ```json
 {
@@ -53,286 +63,56 @@ nomi channel ...
 }
 ```
 
-字段定义见 [nomi/config/schema/channel.py](../nomi/config/schema/channel.py#L12-L35)。
+常用字段：
 
-### 关键字段
-
-| 字段 | 说明 |
+| 字段 | 含义 |
 |---|---|
-| `channel.kind` | 当前启用的唯一 channel，设成 `weixin` 才会启用 |
-| `channel.weixin.allowFrom` | 允许访问的微信用户列表，`"*"` 表示全部 |
-| `channel.weixin.baseUrl` | 微信 ilink 服务地址 |
-| `channel.weixin.routeTag` | 可选路由标记 |
-| `channel.weixin.token` | 可手动注入 token |
-| `channel.weixin.stateDir` | 登录态存储目录覆盖 |
-| `channel.weixin.pollTimeout` | 长轮询超时时间 |
+| `allowFrom` | 允许哪些微信会话触发 Nomi |
+| `baseUrl` | 微信 ilink 服务地址 |
+| `token` | 登录 token |
+| `stateDir` | 登录态保存目录 |
+| `pollTimeout` | 拉取消息超时时间 |
 
----
+## 📣 分段发送
 
-## 登录
+微信里长回复可以用 `<part>` 分段。
 
-### 命令
-
-```bash
-nomi channel login
-```
-
-### 当前真实行为
-
-这条命令现在不是“如果已有登录态就跳过”，而是固定重新登录 🔁：
-
-1. 清除已有微信状态
-2. 清空当前 workspace 下全部 session 文件
-3. 请求新的二维码
-4. 输出登录链接
-5. 如果本机装了 `qrcode`，直接把二维码打印到终端
-6. 轮询二维码状态，确认后保存 token
-
-对应代码：
-
-- 打印二维码：[nomi/channel/adapters/weixin/channel.py](../nomi/channel/adapters/weixin/channel.py#L488-L507)
-- 二维码轮询登录：[nomi/channel/adapters/weixin/channel.py](../nomi/channel/adapters/weixin/channel.py#L509-L545)
-- login 总入口：[nomi/channel/adapters/weixin/channel.py](../nomi/channel/adapters/weixin/channel.py#L547-L571)
-
-### 登录态保存位置
-
-默认保存到：
+例如模型输出：
 
 ```text
-~/.nomi/weixin/account.json
+第一段<part>第二段<part>第三段
 ```
 
-路径解析在 [nomi/channel/registry.py](../nomi/channel/registry.py#L80-L91)。
+微信会按段发送。自动任务提醒也会按 `<part>` 拆分发送。
 
-保存内容除了 `token`，还包括：
+## ⏰ 自动任务提醒
 
-- `get_updates_buf`
-- `context_tokens`
-- `typing_tickets`
-- `base_url`
+自动任务默认是全局提醒。如果微信 channel 正在运行且可接收提醒，任务结果会投递到微信。
 
-见 [nomi/channel/adapters/weixin/channel.py](../nomi/channel/adapters/weixin/channel.py#L268-L293)。
+如果任务设置了 `target_channels=["weixin"]`，则只发微信。
 
----
+## 📎 媒体处理
 
-## 启动方式
+微信 channel 会把下载到的媒体保存到实例 media 目录，然后交给 Agent 处理。
 
-### 启用与运行
+语音会通过 runtime 的 transcription provider 转写成文本。
 
-```bash
-nomi channel enable weixin
-nomi instance restart
-```
+## 🧱 边界
 
-特点：
+- 当前只支持一个 active channel。
+- channel enable 只改配置，启动需要 instance restart。
+- 未登录时，runtime 可以启动，但微信 channel 不运行。
+- 微信不是单独 runtime owner。
+- 微信入口收到的消息也会写入同一套 session 系统。
 
-- `channel enable` 只修改实例配置
-- `instance restart` 启动唯一实例 runtime
-- 如果当前没有登录态，runtime 会跳过 weixin adapter 并在状态里显示未运行
+## 🔎 相关代码
 
-命令入口：[nomi/cli/commands/channel.py](../nomi/cli/commands/channel.py#L1-L123)
-
-### 停止与重启
-
-```bash
-nomi channel disable
-nomi instance restart
-```
-
-### 日志
-
-```bash
-nomi instance log
-```
-
-日志文件：
-
-```text
-~/.nomi/logs/runtime-service.log
-```
-
-路径定义在 [nomi/runtime/service/state.py](../nomi/runtime/service/state.py#L53-L65)。
-
----
-
-## 运行规则
-
-当前产品规则：
-
-- 一个 instance root 只允许一个实例 runtime
-- weixin 是挂在该 runtime 上的 adapter
-- channel 配置变化通过 `nomi instance restart` 生效
-
-统一 runtime 状态在 [nomi/runtime/service/state.py](../nomi/runtime/service/state.py#L1-L306)。
-
----
-
-## 微信收消息
-
-### 长轮询
-
-微信当前通过 ilink HTTP 长轮询接收消息：
-
-- `getupdates`
-- 保存 `get_updates_buf`
-- 逐条转成 `InboundMessage`
-
-轮询主逻辑：
-
-- start：[nomi/channel/adapters/weixin/channel.py](../nomi/channel/adapters/weixin/channel.py#L573-L613)
-- 单次 poll：[nomi/channel/adapters/weixin/channel.py](../nomi/channel/adapters/weixin/channel.py#L699-L726)
-
-### 当前支持的入站类型
-
-| 类型 | 支持情况 | 处理方式 |
-|---|---|---|
-| 文本 | 支持 | 直接作为正文 |
-| 图片 | 支持 | 下载后作为附件，并补一段提示文本 |
-| 文件 | 支持 | 下载后作为附件，并补一段提示文本 |
-| 语音 | 支持 | 优先用微信自带文本；没有时下载后走 runtime transcription |
-| 视频 | 部分支持 | 只生成“用户发送了视频”的提示文本 |
-
-消息归一化入口在 [nomi/channel/adapters/weixin/channel.py](../nomi/channel/adapters/weixin/channel.py#L727-L837)。
-
-### `allowFrom`
-
-当前只接受 `allowFrom` 允许的发送者：
-
-- `["*"]` 表示全部允许
-- 否则必须显式匹配 sender id
-
-见 [nomi/channel/adapters/weixin/channel.py](../nomi/channel/adapters/weixin/channel.py#L683-L697)。
-
----
-
-## 微信发消息
-
-### 普通最终消息
-
-最终消息通过：
-
-- `send_message()`
-
-发给微信，但它会受流式状态影响，不是所有最终文本都会直接再发一次。
-
-从测试可以看出，当前规则是：
-
-- 如果本轮已经有流式 delta 并已发送，就不会再重复发最终整段
-- cron 触发这种场景允许原样发送包含 `<part>` 的最终文本
-
-相关测试：
-
-- [tests/channels/test_weixin.py](../tests/channels/test_weixin.py#L622-L661)
-- [tests/channels/test_weixin.py](../tests/channels/test_weixin.py#L665-L695)
-
-### 下行文件
-
-当前微信 channel 已支持 Nomi 主动下发本地文件：
-
-- 入口仍然复用 `OutboundMessage`
-- 如果 `message.media` 里带的是本地文件路径，微信 adapter 会先上传文件，再发送 `file_item`
-- 如果同时存在 `content`，会先发文件，再按原有逻辑发送文本
-
-当前实现只收口了文件类型，不顺手扩图片/视频下行。
-
-实现路径：
-
-- 先 `getuploadurl`
-- 本地按微信协议做 AES-128-ECB 加密上传
-- 取响应头 `x-encrypted-param`
-- 再通过 `sendmessage` 发送 `file_item`
-
-### typing 状态
-
-当前微信已经支持官方那套 typing：
-
-- 首次流式输出前发 `status=1`
-- 活跃流式期间每 5 秒 keepalive 一次
-- 收尾时发 `status=2`
-
-关键代码：
-
-- getconfig：[nomi/channel/adapters/weixin/channel.py](../nomi/channel/adapters/weixin/channel.py#L416-L424)
-- sendtyping：[nomi/channel/adapters/weixin/channel.py](../nomi/channel/adapters/weixin/channel.py#L438-L466)
-- typing keepalive：[nomi/channel/adapters/weixin/streaming.py](../nomi/channel/adapters/weixin/streaming.py#L141-L195)
-
----
-
-## 分段规则
-
-这是当前微信链路里最关键的一点。
-
-### 当前实现不是“智能切段”
-
-现在微信 channel 不会自己按语义理解后切分。  
-它的真实规则是：
-
-- 持续接收 model 输出的流式 delta
-- 把可见文本拼到缓冲区
-- 只有遇到 `<part>` 时，才把 `<part>` 前面的内容 flush 成一条微信消息
-- `_stream_end` 时，如果缓冲区还有非空尾段，就把尾段再发出去
-- 连续空段会被跳过
-
-对应实现：
-
-- marker 定义：[nomi/channel/adapters/weixin/streaming.py](../nomi/channel/adapters/weixin/streaming.py#L15-L18)
-- 分段 flush：[nomi/channel/adapters/weixin/streaming.py](../nomi/channel/adapters/weixin/streaming.py#L106-L123)
-- stream end flush：[nomi/channel/adapters/weixin/streaming.py](../nomi/channel/adapters/weixin/streaming.py#L90-L104)
-
-### 这意味着什么
-
-这意味着：
-
-- 微信分段主要由模型决定
-- channel 只是根据 `<part>` 做机械 flush
-- 如果模型不给 `<part>`，长文本就一直缓冲到 `_stream_end`
-
-测试已经覆盖了这些事实：
-
-- 只有出现 `<part>` 才发送前面内容：[tests/channels/test_weixin.py](../tests/channels/test_weixin.py#L443-L468)
-- 单个 delta 含多个 `<part>` 时会多次 flush：[tests/channels/test_weixin.py](../tests/channels/test_weixin.py#L472-L490)
-- 跨 delta 拼出 `<part>` 也能正确 flush：[tests/channels/test_weixin.py](../tests/channels/test_weixin.py#L494-L518)
-- 不会因为文本太长就自己硬切：[tests/channels/test_weixin.py](../tests/channels/test_weixin.py#L522-L545)
-- stream end 时尾段会发送：[tests/channels/test_weixin.py](../tests/channels/test_weixin.py#L549-L575)
-
-### 模型侧约束
-
-微信 channel 专属 prompt 仍然要求模型：
-
-- 用 `<part>` 作为唯一分段标记
-- 每段结尾必须带 `<part>`
-- `<part>` 前后不能有空格
-
-模板文件见 [nomi/templates/CHANNEL_WEIXIN.md](../nomi/templates/CHANNEL_WEIXIN.md#L1-L150)。
-
----
-
-## 工作区与状态文件
-
-微信相关的运行态通常会分布在：
-
-```text
-~/.nomi/weixin/account.json
-~/.nomi/logs/runtime-service.pid
-~/.nomi/logs/runtime-service.json
-~/.nomi/logs/runtime-service.log
-~/.nomi/media/weixin/
-```
-
-路径来源：
-
-- 登录态：[nomi/channel/registry.py](../nomi/channel/registry.py#L80-L91)
-- runtime pid/log/state：[nomi/runtime/service/state.py](../nomi/runtime/service/state.py#L53-L65)
-- 媒体目录：[nomi/config/paths.py](../nomi/config/paths.py#L26-L29)
-
----
-
-## 当前限制
-
-当前微信实现有几个边界要明确：
-
-- 用户入口不暴露平台名，只暴露 `nomi channel`
-- 当前 active kind 只实现 `weixin`
-- `feishu` 只有配置壳，没有运行逻辑
-- 微信分段依赖 `<part>`，不是 channel 自己做语义切分
-- 外部 channel 全局只允许一个实例占用 runtime
+| 代码 | 说明 |
+|---|---|
+| [nomi/cli/commands/channel.py](../nomi/cli/commands/channel.py#L21-L120) | channel CLI |
+| [nomi/channel/registry.py](../nomi/channel/registry.py#L24-L99) | channel 注册和登录态判断 |
+| [nomi/channel/service/login.py](../nomi/channel/service/login.py#L10-L51) | 登录流程 |
+| [nomi/channel/service/runtime.py](../nomi/channel/service/runtime.py#L18-L117) | channel runner |
+| [nomi/channel/adapters/weixin/channel.py](../nomi/channel/adapters/weixin/channel.py#L159-L260) | WeixinChannel 初始化和状态目录 |
+| [nomi/channel/adapters/weixin/channel.py](../nomi/channel/adapters/weixin/channel.py#L1139-L1200) | 微信发送逻辑和任务分段 |
+| [nomi/channel/adapters/weixin/streaming.py](../nomi/channel/adapters/weixin/streaming.py#L15-L212) | 微信流式分段发送 |

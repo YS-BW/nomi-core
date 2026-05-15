@@ -1,57 +1,47 @@
 # 📦 Skills
 
-Skills 是当前实例下的“任务说明包”机制 📦
+Skills 是给 Nomi 扩展专业工作流的说明包。它不是普通工具，也不是硬编码 prompt，而是一组安装到实例里的文件说明。
 
-它不是 tool，也不是硬编码在 prompt 里的几段死文本。
+模型看到 skill 摘要后，会在需要时读取对应 `SKILL.md`，再按里面的流程继续读取模板、参考资料或脚本。
 
-更准确地说，它是：
+## 🌟 Skill 能做什么
 
-- 扫描 `~/.nomi/skills` 🔎
-- 把 skill metadata 注入 system prompt 🧠
-- 在需要时允许模型读取 skill 文件正文 📄
+Skill 适合封装：
 
----
+- 某类 API 的固定使用流程。
+- 某类文档、表格、PDF 的处理规范。
+- 某个工具链的操作步骤。
+- 带模板、示例、脚本的复杂任务。
 
-## 目录位置
+## 📁 安装位置
 
-全局 skills 目录默认是：
-
-```text
-~/.nomi/skills
-```
-
-命名实例下则是：
+当前实例的 skill root 是：
 
 ```text
 <instance-root>/skills
 ```
 
-路径逻辑在 [nomi/config/paths.py](../nomi/config/paths.py#L30-L52)。
-
-它是当前实例内唯一的 canonical root。`SkillRegistry` 只扫描这里，`SkillManager` 也只把这里当成正式安装目录。
-
-系统还支持一组外部 skill roots，默认包括：
+默认实例就是：
 
 ```text
-~/.claude/skills
-~/.codex/skills
+~/.nomi/skills
 ```
 
-外部 roots 只作为安装时的一次性导入来源，不作为直接扫描结果输出路径。
+外部 roots 例如 `~/.codex/skills`、`~/.claude/skills` 只作为安装来源，不作为运行时扫描根。
 
----
+## 🧩 最小结构
 
-## 一个 skill 的最小结构
+一个最小 skill：
 
 ```text
-~/.nomi/skills/my-skill/
+my-skill/
 └── SKILL.md
 ```
 
 更完整时可以有：
 
 ```text
-~/.nomi/skills/my-skill/
+my-skill/
 ├── SKILL.md
 ├── template.md
 ├── references/
@@ -59,151 +49,50 @@ Skills 是当前实例下的“任务说明包”机制 📦
 └── scripts/
 ```
 
----
+## 💬 用户怎么用
 
-## 元数据解析
+用户可以说：
 
-`SKILL.md` 当前支持 frontmatter 里的基础字段：
+```text
+安装这个 skill。
+列出现在有哪些 skill。
+创建一个处理合同的 skill。
+卸载 xxx skill。
+```
 
-- `name`
-- `description`
+也可以使用 slash command：
 
-扫描与解析相关代码：
+```text
+/skill list
+/skill install <source>
+/skill uninstall <name>
+```
 
-- registry：[nomi/agent/skills/registry.py](../nomi/agent/skills/registry.py#L14-L144)
-- parser：[nomi/agent/skills/parser.py](../nomi/agent/skills/parser.py)
+## 🧠 模型怎么知道 skill
 
----
+System prompt 里只注入 skill 摘要：
 
-## Prompt 注入方式
-
-当前 skills 不会把正文自动全部塞进 system prompt。
-
-它只会注入：
-
-- key
+- skill key
 - name
 - description
 - `SKILL.md` 路径
 
-见 [nomi/agent/skills/registry.py](../nomi/agent/skills/registry.py#L54-L79)。
+skill 正文不会默认整篇注入。模型需要时再读取对应文件。
 
-这意味着：
+## 🧱 边界
 
-- skills 默认是“告诉模型可用什么”
-- 模型是否继续读取 skill 正文，要看具体任务
+- Skill 不是工具调用本身。
+- Skill 不会自动执行脚本；模型必须按说明决定是否调用工具。
+- Skill 安装到当前实例，不是全局跨实例共享。
+- 同名 skill 已存在时，需要先卸载再安装。
 
----
+## 🔎 相关代码
 
-## 管理命令
-
-当前 slash 命令支持：
-
-- `/skill list`
-- `/skill install <source>`
-- `/skill uninstall <name>`
-
-入口在 [nomi/command/handlers/skills.py](../nomi/command/handlers/skills.py#L11-L98)。
-
-### `list`
-
-会扫描当前全局 skills 并生成展示文本。
-
-### `install`
-
-通过 `SkillManager` 安装 skill。
-
-### `uninstall`
-
-通过 `SkillManager` 卸载 skill。
-
-当前只有在安装 skill 包时，才会按需做一次外部 roots 导入：
-
-- 非 Windows：优先创建符号链接
-- Windows：回退为复制
-- 若目标 canonical 路径已存在，则跳过，不覆盖外部来源
-- `list_skills` / `SkillRegistry.scan()` 不会持续自动补回外部 skill
-
-当前模型侧默认工具还包括：
-
-- `list_skills`
-- `find_skills`
-- `install_skill`
-- `create_skill`
-- `uninstall_skill`
-
-其中：
-
-- `find_skills` 会先看本地已安装 skill，再调用 `npx skills find` 搜索外部技能生态
-- `install_skill` 现在除了本地目录、压缩包、Git 链接，也支持 `owner/repo@skill` 这类 skills 包来源
-- `create_skill` 会直接在 `~/.nomi/skills` 下生成最小 `SKILL.md` 脚手架
-
----
-
-## SkillManager 和 SkillRegistry 的边界
-
-这两者当前已经分工很清楚：
-
-### `SkillRegistry`
-
-只读 owner，负责：
-
-- 扫描 skills 目录
-- 解析 metadata
-- 生成 prompt summary
-- 列出当前状态
-
-见 [nomi/agent/skills/registry.py](../nomi/agent/skills/registry.py#L14-L144)。
-
-### `SkillManager`
-
-写操作 owner，负责：
-
-- 安装
-- 卸载
-- 在安装外部 skill 包时，把外部 roots 里的结果一次性导入 canonical root
-
-当前文档里不要再把这两者混成一个“大技能系统类”。
-
----
-
-## Skill 使用日志
-
-当前 skill registry 还支持记录 usage：
-
-- 显式提到 skill 时
-- 或模型路径触发时
-
-记录接口在 [nomi/agent/skills/registry.py](../nomi/agent/skills/registry.py#L99-L133)。
-
-日志文件路径由：
-
-- [nomi/config/paths.py](../nomi/config/paths.py#L47-L49)
-
-返回。
-
----
-
-## 主链路里怎么接入
-
-当前 `AgentLoop` 初始化时会创建：
-
-- `SkillRegistry`
-
-并把它传给 `ContextBuilder`：
-
-- [nomi/agent/loop.py](../nomi/agent/loop.py#L145-L153)
-
-所以 skills 现在已经是系统 prompt 的一部分，而不是 CLI 的附加功能。
-
----
-
-## 当前边界
-
-skills 当前是“全局任务知识与工作流说明”的系统，不是：
-
-- marketplace
-- 权限中心
-- 复杂插件平台
-
-如果文档把它写得太重，会误导后续实现方向。
+| 代码 | 说明 |
+|---|---|
+| [nomi/agent/skills/manager.py](../nomi/agent/skills/manager.py#L44-L197) | skill 安装、卸载、创建 |
+| [nomi/agent/skills/registry.py](../nomi/agent/skills/registry.py#L15-L147) | skill 扫描和 prompt 摘要 |
+| [nomi/agent/skills/parser.py](../nomi/agent/skills/parser.py#L1-L60) | `SKILL.md` metadata 解析 |
+| [nomi/agent/tools/skill_tools.py](../nomi/agent/tools/skill_tools.py#L1-L425) | skill 相关工具 |
+| [nomi/command/handlers/skills.py](../nomi/command/handlers/skills.py#L1-L98) | `/skill` 命令 |
+| [nomi/config/paths.py](../nomi/config/paths.py#L30-L52) | skill root 路径 |

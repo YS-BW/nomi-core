@@ -1,0 +1,85 @@
+<svg width="1280" height="640" viewBox="0 0 1280 640" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1280" y2="640" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F3EEE7"/>
+      <stop offset="0.52" stop-color="#EAF3F8"/>
+      <stop offset="1" stop-color="#DDEAF3"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="120" y1="100" x2="1160" y2="560" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1E2A33"/>
+      <stop offset="1" stop-color="#2B4250"/>
+    </linearGradient>
+    <linearGradient id="dog" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#D9A066"/>
+      <stop offset="1" stop-color="#A86A3A"/>
+    </linearGradient>
+    <filter id="shadow" x="82" y="70" width="1116" height="528" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="16"/>
+      <feGaussianBlur stdDeviation="19"/>
+      <feComposite in2="hardAlpha" operator="out"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.10 0 0 0 0 0.15 0 0 0 0 0.17 0 0 0 0.20 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow" result="shape"/>
+    </filter>
+  </defs>
+
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <circle cx="150" cy="116" r="96" fill="#D8B08C" fill-opacity="0.22"/>
+  <circle cx="1106" cy="538" r="132" fill="#8DB5C8" fill-opacity="0.18"/>
+  <path d="M0 505C131 446 274 430 424 467C563 501 706 552 874 518C1038 484 1148 448 1280 474V640H0V505Z" fill="#FAF8F5" fill-opacity="0.82"/>
+
+  <g filter="url(#shadow)">
+    <rect x="120" y="100" width="1040" height="460" rx="36" fill="url(#panel)"/>
+    <rect x="146" y="126" width="988" height="408" rx="24" stroke="#E7E4DC" stroke-opacity="0.20" stroke-width="2"/>
+  </g>
+
+  <g opacity="0.22">
+    <path d="M932 176H1106" stroke="#E8EEF1" stroke-width="2" stroke-linecap="round"/>
+    <path d="M890 224H1072" stroke="#E8EEF1" stroke-width="2" stroke-linecap="round"/>
+    <path d="M946 272H1100" stroke="#E8EEF1" stroke-width="2" stroke-linecap="round"/>
+    <path d="M874 320H1064" stroke="#E8EEF1" stroke-width="2" stroke-linecap="round"/>
+    <path d="M928 368H1112" stroke="#E8EEF1" stroke-width="2" stroke-linecap="round"/>
+  </g>
+
+  <g transform="translate(808 172)">
+    <ellipse cx="146" cy="126" rx="120" ry="110" fill="url(#dog)"/>
+    <path d="M53 54C28 66 18 93 22 118C51 113 70 90 75 64L53 54Z" fill="#7E4728"/>
+    <path d="M238 54C263 66 273 93 269 118C240 113 221 90 216 64L238 54Z" fill="#7E4728"/>
+    <ellipse cx="102" cy="118" rx="18" ry="20" fill="#3A2A22"/>
+    <ellipse cx="190" cy="118" rx="18" ry="20" fill="#3A2A22"/>
+    <circle cx="100" cy="114" r="5" fill="#F8F3EA"/>
+    <circle cx="188" cy="114" r="5" fill="#F8F3EA"/>
+    <ellipse cx="146" cy="160" rx="44" ry="34" fill="#F0D7BB"/>
+    <ellipse cx="146" cy="148" rx="16" ry="12" fill="#34251E"/>
+    <path d="M128 176C138 187 154 187 164 176" stroke="#5F3725" stroke-width="5" stroke-linecap="round"/>
+    <circle cx="82" cy="148" r="6" fill="#D78E7D" fill-opacity="0.55"/>
+    <circle cx="210" cy="148" r="6" fill="#D78E7D" fill-opacity="0.55"/>
+  </g>
+
+  <text x="188" y="214" fill="#F2E4CF" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="86" font-weight="800">🐶 Nomi</text>
+  <text x="194" y="284" fill="#F5F2EC" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="34" font-weight="700">你的个人 AI 助手</text>
+  <text x="194" y="336" fill="#CAD8DF" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="24">CLI · Desktop Remote · Weixin Channel · Tasks · Memory · Instance Chat</text>
+
+  <g transform="translate(194 394)">
+    <rect width="182" height="48" rx="24" fill="#E2B07E"/>
+    <text x="28" y="31" fill="#1F2C34" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="19" font-weight="800">长期陪伴</text>
+  </g>
+  <g transform="translate(396 394)">
+    <rect width="158" height="48" rx="24" fill="#8CB3C7"/>
+    <text x="25" y="31" fill="#1F2C34" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="19" font-weight="800">全局提醒</text>
+  </g>
+  <g transform="translate(574 394)">
+    <rect width="188" height="48" rx="24" fill="#C7D7DF"/>
+    <text x="28" y="31" fill="#1F2C34" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="19" font-weight="800">社交协作</text>
+  </g>
+
+  <g transform="translate(818 392)">
+    <rect x="0" y="0" width="232" height="92" rx="22" fill="#F7F3EC" fill-opacity="0.08" stroke="#F7F3EC" stroke-opacity="0.22"/>
+    <circle cx="46" cy="46" r="22" fill="#E2B07E"/>
+    <path d="M39 45L45 51L57 38" stroke="#1F2C34" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="80" y="38" fill="#F3EFE8" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="18" font-weight="700">One Nomi</text>
+    <text x="80" y="63" fill="#C5D2D9" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="15">Desktop, CLI, Weixin</text>
+  </g>
+</svg>

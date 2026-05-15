@@ -1,158 +1,84 @@
 # 📁 Workspace
 
-Workspace 是某个 instance root 下的 agent 工作区 📁🌍
+Workspace 是某个 instance 的工作区。它保存 Nomi 的启动文件、长期记忆和部分工作产物。
 
-你也可以把它理解成：
+它不是整个实例 root。实例 root 更大，workspace 只是其中一块。
 
-> “这个 agent 眼下生活和工作的那块地盘。”
+## 🧩 Instance Root 和 Workspace
 
-默认实例下的默认路径：
+实例 root 通常是：
+
+```text
+~/.nomi
+```
+
+workspace 通常是：
 
 ```text
 ~/.nomi/workspace
 ```
 
-默认值定义在 [nomi/config/schema/agent.py](../nomi/config/schema/agent.py#L20-L38)。
-
-路径解析在 [nomi/config/paths.py](../nomi/config/paths.py#L52-L61)。
-
----
-
-## Workspace 和 Instance Root 的关系
-
-这里最容易搞混，所以一定要先分清两个层级 👇
-
-### 1. `<instance-root>`
-
-实例运行目录，通常放：
-
-- `config.json`
-- `logs/`
-- `history/`
-- `skills/`
-- `media/`
-- `sessions/`
-- `weixin/`（未显式覆盖 `stateDir` 时）
-
-### 2. `<instance-root>/workspace`
-
-当前 agent 的工作区，通常放：
-
-- bootstrap files
-- memory
-- cron
-
-这两个目录不要混着理解。
-
-`TOOLS.md` 不属于工作区文件。工具说明由 core 包内模板注入 system prompt，避免每个实例复制一份后漂移。
-
----
-
-## 首次初始化会写哪些模板
-
-`sync_workspace_templates()` 会在工作区里补这些文件：
-
-- `AGENTS.md`
-- `SOUL.md`
-- `USER.md`
-- `memory/MEMORY.md`
-- `memory/history.jsonl`
-
-实现见 [nomi/utils/workspace.py](../nomi/utils/workspace.py#L10-L61)。
-
----
-
-## 典型目录结构
+命名实例则是：
 
 ```text
-<instance-root>/workspace/
+~/.nomi/instances/<name>/workspace
+```
+
+## 📄 首次初始化会生成什么
+
+workspace 初始化时会补这些文件：
+
+```text
+workspace/
 ├── AGENTS.md
 ├── SOUL.md
 ├── USER.md
-├── memory/
-│   ├── MEMORY.md
-│   ├── history.jsonl
-│   ├── user_profile_candidates.json
-│   ├── .cursor
-│   └── .dream_cursor
-└── cron/
-    └── jobs.json
+└── memory/
+    ├── MEMORY.md
+    └── history.jsonl
 ```
 
----
+`TOOLS.md` 不再生成到 workspace。工具说明由 core 内置模板注入 system prompt。
 
-## 这些文件分别做什么
+## 🧠 这些文件分别是什么
 
-| 文件 | 作用 |
+| 文件 | 用途 |
 |---|---|
-| `AGENTS.md` | 当前工作区的项目规则与开发说明 |
-| `SOUL.md` | AI 自我约束和风格 |
-| `USER.md` | 已确认的用户画像 |
-| `memory/MEMORY.md` | 长期事实记忆 |
-| `memory/history.jsonl` | 长期归档历史 |
-| `memory/user_profile_candidates.json` | 待确认画像候选 |
-| `cron/jobs.json` | 任务系统派生出的 cron 调度状态 |
-| `tasks/tasks.json` | 自动任务定义真源 |
+| `AGENTS.md` | 当前实例的项目/协作说明 |
+| `SOUL.md` | 当前 Nomi 的自我设定 |
+| `USER.md` | 用户画像和长期偏好 |
+| `memory/MEMORY.md` | 长期记忆正文 |
+| `memory/history.jsonl` | 记忆相关历史记录 |
 
----
+## 🪪 名字同步
 
-## Workspace 和 Session 的区别
+用户说“你现在就叫 xxx”时，模型会调用 `instance_set_name`。
 
-### 换 session
+这个动作会：
 
-改变的是：
+- 更新配置里的 `instance.key`。
+- 同步更新 workspace 里的 `SOUL.md` 自称。
 
-- 当前会话线程
+## 🧱 工作区纪律
 
-不改变：
+Workspace 是长期目录，不是一次性临时目录。
 
-- 记忆文件
-- cron 派生状态
-- skills
-- bootstrap files
+模型应该：
 
-### 换 workspace
+- 先读后写。
+- 不把临时调试文件堆在根目录。
+- 把最终产物放在语义明确的位置。
+- 不把工具说明复制进 workspace。
+- 不把外部工具残留当作 Nomi 的长期文件。
 
-改变的是：
+## 🔎 相关代码
 
-- 整套运行世界
-
-包括：
-
-- 会话文件
-- 长期记忆
-- cron 派生状态与任务定义
-- bootstrap files
-
-所以 `--workspace` 的影响远大于 `--session`。
-
----
-
-## GitStore
-
-工作区初始化时还会尝试为记忆文件建立 GitStore：
-
-- 跟踪 `SOUL.md`
-- 跟踪 `USER.md`
-- 跟踪 `memory/MEMORY.md`
-
-见 [nomi/utils/workspace.py](../nomi/utils/workspace.py#L50-L58)。
-
-这就是为什么 Dream 可以做版本查看和回滚。
-
----
-
-## 当前边界
-
-Workspace 当前承载的是“agent 的运行世界”，不是整个全局配置目录。
-
-所以：
-
-- `config.json` 在 `<instance-root>`
-- `sessions` 在 `<instance-root>/sessions`
-- `skills` 在 `<instance-root>/skills`
-- `history` 在 `<instance-root>/history`
-- logs 在 `<instance-root>/logs`
-- 只有 agent 运行工作区和长期记忆在 `<instance-root>/workspace`
-
-文档里如果把这些全写进 workspace，会让用户误解路径层级。
+| 代码 | 说明 |
+|---|---|
+| [nomi/utils/workspace.py](../nomi/utils/workspace.py#L13-L64) | 同步 workspace 模板 |
+| [nomi/utils/workspace.py](../nomi/utils/workspace.py#L67-L110) | instance 名字同步到 `SOUL.md` |
+| [nomi/config/paths.py](../nomi/config/paths.py#L52-L61) | workspace 路径 |
+| [nomi/templates/workspace/AGENTS.md](../nomi/templates/workspace/AGENTS.md#L1-L1) | 默认 AGENTS 模板 |
+| [nomi/templates/workspace/SOUL.md](../nomi/templates/workspace/SOUL.md#L1-L9) | 默认 SOUL 模板 |
+| [nomi/templates/workspace/USER.md](../nomi/templates/workspace/USER.md#L1-L30) | 默认 USER 模板 |
+| [nomi/templates/TOOLS.md](../nomi/templates/TOOLS.md#L1-L157) | 内置工具说明模板 |

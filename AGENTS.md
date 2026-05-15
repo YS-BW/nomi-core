@@ -1,716 +1,299 @@
 # Nomi Project Guide
 
-> 这份文件是 Nomi 项目的统一项目指导文件，给后续接手的 agent 使用，不属于正式用户文档。
+> 这份文件是给接手 `nomi-core` 的 agent 使用的项目维护规则，不是正式用户文档。
 
 ## Repo Ownership
 
-当前三仓已经拆分，仓库职责固定如下：
+当前三仓职责固定如下：
 
 - `nomi-core`
-  - Python 核心仓
-  - 负责 `cli / runtime / agent / session / providers / tools / cron / channel / remote server / config`
+  - Python 核心仓。
+  - 负责 CLI、runtime、agent、session、provider、tools、tasks、cron、channel、remote server、instance channel、config。
 - `nomi-desktop`
-  - Tauri + React 桌面端仓
-  - 负责 `desktop transport / state / UI / window behavior / local persistence / build`
+  - Tauri + React 桌面端仓。
+  - 负责 desktop UI、desktop state、Tauri 窗口、桌面本地持久化和构建。
 - `nomi-protocol`
-  - 共享协议仓
-  - 负责 remote wire contract、schema、版本与共享类型
+  - 共享协议仓。
+  - 负责 remote HTTP + SSE contract、schema、版本和共享类型。
 
-当前 Codex 分工固定如下：
+当前 Codex 分工：
 
-- 本仓 Codex 默认 owner 是 `nomi-core`
-- desktop 侧由另一个 Codex 负责 `/Users/lixinlv/Doing/nomi-desktop`
-- `nomi-protocol` 默认由 core owner 负责修改和发起版本升级
+- 本仓 Codex 默认 owner 是 `nomi-core`。
+- desktop 侧由另一个 Codex 负责 `/Users/lixinlv/Doing/nomi-desktop`。
+- `nomi-protocol` 默认由 core owner 修改和发版。
 
-## Cross-repo Collaboration Rules
+## Cross-repo Rules
 
-涉及 desktop 的需求时，先判断是不是 core 仓职责：
+涉及 desktop 的需求，先判断是不是 core 仓职责：
 
-- 如果只是桌面 UI、桌面状态归并、Tauri 窗口、前端展示、desktop 本地存储问题：
-  - 不要直接修改 `nomi-desktop`
-  - 先联系 desktop Codex，由它负责落地
-- 如果需要 core 配合 desktop：
-  - 先明确协议、字段、错误语义、验收方式
-  - 再在本仓实现 core 侧改动
-- 如果需要协议变更：
-  - 先与 desktop Codex 对齐
-  - 由 core owner 修改 `nomi-protocol`
-  - 再同步升级 `nomi-core`
-  - 最后通知 desktop Codex 升级依赖并接入
+- UI、前端状态、Tauri、窗口行为、desktop 本地存储问题，不直接改 `nomi-desktop`，交给 desktop owner。
+- core 需要配合 desktop 时，先明确接口字段、错误语义和验收方式，再改 core。
+- remote 协议变更必须先获得用户明确同意，再改 `nomi-protocol`。
+- 不在 core 私自发明会影响 desktop 的 remote wire 语义。
 
-协议变更职责固定如下：
+协议变更固定流程：
 
-- `nomi-protocol` 的 owner 是 core owner
-- desktop owner 有协议需求提出权和验收权
-- 不单独设一个常驻 protocol owner
-- 任何 `nomi-protocol` 改动都必须先获得用户明确同意，未经批准不得修改协议仓或协议语义
+1. 先写清楚为什么改、改哪些 route/event/schema、core 和 desktop 怎么验收。
+2. 用户确认后，先改 `nomi-protocol`。
+3. core 依赖新协议完成实现。
+4. 通知 desktop owner 升级协议依赖并接入。
+5. core / desktop 都用正式 tag 依赖完成验证后，再视为协议联动完成。
 
-协议变更流程固定如下：
+固定禁止：
 
-1. 由提出需求的一方先写清楚：
-   - 为什么要改
-   - 涉及哪个 command / event
-   - 新增或修改哪些字段
-   - 兼容性要求
-   - desktop / core 各自如何验收
-2. 由 core owner 判断：
-   - 是否只需要本地派生，不必改协议
-   - 是否需要改 `nomi-protocol`
-   - 是否需要 `protocol + core + desktop` 三仓联动
-3. 如果需要改协议：
-   - 先征得用户明确同意
-   - 先修改 `nomi-protocol`
-   - 再修改 `nomi-core`
-   - 最后由 desktop 升级协议依赖并完成消费
+- 不主动修改 `/Users/lixinlv/Doing/nomi-desktop` 代码。
+- 不绕过 desktop owner 改桌面端实现。
+- 不把 desktop 私有补丁塞进 core。
 
-协议开发与发布流程固定如下：
+## Current Product Facts
 
-1. 先在本地修改 `nomi-protocol`
-   - 先更新协议 spec、Python 导出、TypeScript 导出和 `dist/`
-   - 这一步先不要求立即推 GitHub tag
-2. 本地联调阶段，`nomi-core` 和 `nomi-desktop` 都临时指向同一份本地 `nomi-protocol`
-   - core owner 负责用本地协议仓联调 `nomi-core`
-   - desktop owner 负责用同一份本地协议仓联调 `nomi-desktop`
-   - 开发阶段不要一边改本地协议，一边继续拿旧 GitHub tag 做真假混合联调
-3. 只有在 core / desktop 都确认联调通过后，才发布 `nomi-protocol`
-   - 推送协议仓
-   - 打新 tag
-4. 协议 tag 发布完成后，再把两边依赖切回正式 GitHub tag
-   - `nomi-core` 升级到新 tag
-   - `nomi-desktop` 升级到新 tag
-   - 更新各自 lockfile / 依赖锁定结果
-5. 最终回归时，必须以正式 tag 依赖为准再跑一轮验证
-   - 不能只拿本地路径联调通过就视为完成
+Nomi 当前是一个以 instance 为核心的个人 AI runtime。
 
-固定禁止事项：
+正式运行模型：
 
-- 不主动修改 `/Users/lixinlv/Doing/nomi-desktop` 中的代码
-- 不绕过 desktop Codex 直接改桌面端实现
-- 不在未同步 desktop 的情况下擅自修改会影响 desktop 的 remote 协议语义
+```text
+InstanceRuntime
+  ├─ CLI
+  ├─ RemoteAdapter       HTTP + SSE
+  ├─ WeixinChannel
+  ├─ AgentLoop
+  ├─ TaskRunner / CronService
+  ├─ SessionManager
+  ├─ Provider
+  ├─ ToolRegistry
+  └─ InstanceChannel
+```
 
-固定协作要求：
+当前统一口径：
 
-- 任何跨仓需求都要先主动沟通，再各自修改自己负责的仓
-- 对外汇报时要明确区分：
-  - `core 已完成`
-  - `等待 desktop 配合`
-  - `需要 protocol 同步`
-
-## Project Overview
-
-Nomi 当前是一个 nanobot 风格的终端 AI 助手项目。
-
-当前产品形态：
-
-- 终端交互入口
-- `Typer` 负责命令入口
-- `prompt_toolkit` 负责输入体验
-- `Rich` 负责输出渲染
-- `AgentLoop` 负责主链路执行
-- `Bus` 负责消息总线
-- `Session` 负责会话持久化
-- `providers` 负责 LLM 抽象
-- `tools` 负责工具调用闭环
-- `skills` 负责 prompt 驱动的全局技能
-- `cron` 负责应用内调度
-
-当前阶段的核心目标不是扩新功能，而是把已有主链路做清楚、做扎实、做成可维护的基座。
-
-## Product Direction
-
-当前项目方向固定如下：
-
-- 做成 nanobot 风格的终端 AI 助手
-- 先完成已有核心能力
-- 不扩未来能力
-- 不做兼容层
-- 不做迁移脚本
-- 不保留过渡实现
-
-当前第一优先级不是“设计更多东西”，而是：
-
-- 保持代码事实、文档事实、测试事实一致
-- 保持主链路清晰
-- 保持项目可验证、可维护
-
-## Current Scope
-
-### Active Modules
-
-这些模块属于当前默认主链路：
-
-- `cli`
-- `agent`
-- `providers`
-- `session`
-- `config`
-- `command`
-- `bus`
-- `utils`
-- `templates`
-- `cron`
-- `agent/skills`
-- 最小工具调用闭环
-
-### Removed Or Non-default Capabilities
-
-这些能力当前不在默认主链路里，不要按“差一点恢复”的心态处理：
-
-- `api`
-- `heartbeat`
-- `security`
-- `bridge`
-- 旧版子代理实现
-
-如果将来要重新做，应该按当前架构重新设计，而不是恢复旧代码当兼容层。
-
-## Current Status
-
-按当前代码事实，项目已经具备：
-
-- 终端主链路闭环
-- 进程内 `runtime` 装配与生命周期管理
-- 基础多轮对话
-- 流式输出
-- 会话持久化
-- 工作区启动模板加载
-- 全局 `skills` 扫描与 prompt 注入
-- `~/.claude/skills` / `~/.codex/skills` 等外部 skill root 可在安装时一次性导入到 `~/.nomi/skills`
-- `cron_create / cron_list / cron_delete / cron_update` 工具驱动的应用内调度、后台轮询、到点执行
-- 文档化的模块教程
-
-按当前代码事实，项目还没有：
-
-- 系统级调度后端
-- 完整的中断能力
-- 正式的 Web / desktop 多端入口
-- 多通道能力
-- 重新设计后的子代理体系
+- 一个 instance root 只允许一个 runtime 进程。
+- `remote` 和 `channel` 是挂在 runtime 上的 adapter，不单独持有 runtime。
+- `nomi instance start/run/stop/restart/status/log/services` 是后台进程管理入口。
+- `nomi remote` 只负责 remote 配置、token 和状态。
+- `nomi channel` 只负责 channel 配置、登录和状态。
+- 自动任务默认是实例级全局提醒。
+- `tasks.json` 是任务定义真源，`cron/jobs.json` 是派生调度状态。
+- `TOOLS.md` 是 core 内置模板，不生成到每个 workspace。
+- `OPERATIONS.md` 是根目录操作手册，方便部署和排障时直接查看。
 
 ## Repo Layout
 
-### Core Code
+核心目录：
 
 - `nomi/cli/`
-  - 命令入口、交互循环、终端 UI
+  - 命令入口、交互循环、终端渲染。
 - `nomi/runtime/`
-  - 运行时装配、主循环生命周期管理
+  - 统一 runtime 装配、adapter 挂载、service 生命周期。
 - `nomi/agent/`
-  - Agent 主循环、上下文构建、记忆、skills、tools
-- `nomi/providers/`
-  - LLM provider 抽象与各家适配
-- `nomi/session/`
-  - 会话模型、jsonl 持久化、checkpoint 恢复
-- `nomi/bus/`
-  - `InboundMessage` / `OutboundMessage` 与队列总线
-- `nomi/command/`
-  - slash 命令路由与内置命令
-- `nomi/config/`
-  - 配置模型、路径和加载逻辑
+  - AgentLoop、上下文构建、工具循环、记忆、skills、prompt。
+- `nomi/remote/`
+  - HTTP API + SSE remote server。
+- `nomi/channel/`
+  - 微信等外部 channel adapter。
+- `nomi/instance_channel/`
+  - instance 好友关系、邀请码、relation token、实例间聊天。
+- `nomi/tasks/`
+  - 自动任务定义、执行、全局提醒队列。
 - `nomi/cron/`
-  - 应用内调度模型、存储、调度、触发
-- `nomi/utils/`
-  - 通用工具函数、消息辅助、模板辅助
+  - 派生时间触发器。
+- `nomi/session/`
+  - 会话模型和 JSONL 持久化。
+- `nomi/providers/`
+  - LLM provider 解析、注册和适配。
+- `nomi/config/`
+  - 配置模型、路径、实例 root 解析。
+- `nomi/bus/`
+  - runtime 内部 inbound / outbound 消息总线。
 - `nomi/templates/`
-  - prompt 模板和工作区启动模板
+  - 内置 prompt、TOOLS、workspace 模板。
 
-### Project Docs
+文档入口：
 
 - `README.md`
-  - 项目入口说明
+  - 项目介绍、快速开始和索引。
+- `OPERATIONS.md`
+  - 日常操作手册。
 - `docs/`
-  - 正式项目文档
+  - 功能文档。
+- `AGENTS.md`
+  - 本文件，项目维护规则。
 - `CLAUDE.md`
-  - 给 Claude 这类讲解型 agent 的项目阅读提示词
-- `PLAN.md`
-  - 后续实现计划，不属于正式文档
-
-### Tests
-
-- `tests/`
-  - 当前主链路、provider、tools、cron、session 等测试
+  - 源码讲解型 agent 提示词。
 
 ## Reading Order
 
-进入任务前，建议按下面顺序建立上下文：
+进入任务前按这个顺序建立上下文：
 
 1. `AGENTS.md`
 2. `README.md`
-3. `docs/README.md`
-4. 对应模块文档
-5. 代码
-6. 测试
+3. `OPERATIONS.md`
+4. `docs/README.md`
+5. 对应模块文档
+6. 代码
+7. 测试
 
-不要跳过 `AGENTS.md` 后直接改代码。
+不要用历史对话替代代码事实。
 
 ## Environment Setup
 
 推荐环境：
 
 - Python `>=3.11`
-- 包管理使用 `uv`
+- `uv`
 
-初始化：
+安装依赖：
 
 ```bash
 uv sync
 ```
 
-如果你只想安装开发依赖：
+安装开发依赖：
 
 ```bash
 uv sync --extra dev
 ```
 
-## Runtime Paths
+安装本地命令：
 
-Nomi 默认运行目录：
-
-```text
-~/.nomi/config.json
-~/.nomi/workspace
-~/.nomi/sessions
-~/.nomi/skills
+```bash
+uv tool install -e . --force
+nomi --version
 ```
 
-这些目录是当前主链路的重要状态来源：
+## Runtime Paths
 
-- `config.json`
-  - provider、模型、工具、MCP 等配置
-- `workspace`
-  - agent 运行工作区
-- `sessions`
-  - 会话历史
-- `workspace/cron/jobs.json`
-  - cron 调度状态
-- `skills`
-  - 全局 skills
+默认实例 root：
 
-### Branch Switch Cleanup Rule
+```text
+~/.nomi
+```
 
-每次切换 Git 分支后，都要先清理运行态目录，再继续测试或开发。
-
-固定清理范围：
-
-- `~/.nomi/workspace`
-- `~/.nomi/skills`
-
-固定保留范围：
+关键运行态：
 
 - `~/.nomi/config.json`
-- `~/.nomi/site-auth`
-- 其它未明确要求删除的认证或配置文件
+- `~/.nomi/workspace`
+- `~/.nomi/sessions`
+- `~/.nomi/tasks`
+- `~/.nomi/logs`
+- `~/.nomi/weixin`
+- `~/.nomi/instance-relations.json`
+- `~/.nomi/instance-requests.json`
+- `~/.nomi/instance-invite.json`
 
-目的：
+服务器上的 `~/.nomi` 默认视为用户运行态数据，不得整体删除、覆盖或重置。
 
-- 避免不同分支复用旧工作区、旧 cron 状态、旧 skills 状态
-- 避免把上一个分支的运行结果误判成当前代码事实
+## Cleanup Rules
 
-### Historical Session Rule
+切换分支或排查历史污染时，可以清理本机运行态，但必须保留配置和认证：
 
-如果确认问题来自旧 session / 旧 workspace 的历史污染，不要加兼容旧会话的代码。
-
-固定处理方式：
-
-- 直接删除 `~/.nomi/workspace`
-- 从干净状态重新 `onboard` 或重新启动 agent
-- 优先把问题当成运行态污染处理，而不是主链路兼容需求
-
-### Post-change Cleanup Rule
-
-每次修改代码后，在收尾阶段都要清理 `~/.nomi` 下除 `config.json` 外的运行态目录和文件。
-
-如果本轮要清理 `~/.nomi/logs`，必须先确认当前没有存活的 channel service；如果还在运行，先执行 `nomi channel stop`，确认已停止后才能删除 `logs` 目录。
-
-固定保留范围：
+固定保留：
 
 - `~/.nomi/config.json`
 - `~/.nomi/weixin`
+- 明确属于认证或登录态的文件
 
-固定清理范围：
+可清理：
 
 - `~/.nomi/workspace`
 - `~/.nomi/sessions`
-- `~/.nomi/skills`
+- `~/.nomi/tasks`
 - `~/.nomi/logs`
-- `~/.nomi/site-auth` 之外，且不包含 `~/.nomi/weixin` 的其它运行态缓存和临时文件
+- `~/.nomi/skills`
 
-如果本轮代码修改涉及 `config` 结构、默认值、字段名或配置加载逻辑，则需要同步重写当前本机 `~/.nomi/config.json`，并保留用户当前实际在用的配置值，不要重置成模板默认值。
+清理前如果实例正在运行，先执行：
 
-### Server `.nomi` Rule
+```bash
+nomi instance stop
+```
 
-如果任务涉及服务器部署或服务器侧排障，默认把服务器上的 `~/.nomi` 视为用户运行态数据，不得整体删除、覆盖或重置。
+## Build And Test
 
-固定规则：
-
-- 除非任务明确要求，或为了让新代码继续工作而必须修改某个特定字段，否则不要改服务器 `~/.nomi` 内容
-- 允许的改动应尽量收敛到具体文件和具体字段
-- 禁止因为部署新版本顺手清空服务器 `~/.nomi`
-- 如果必须修改服务器 `~/.nomi/config.json`，只能保留现有值并做最小字段级调整，不能重置成模板默认值
-
-
-## Build
-
-项目没有复杂构建步骤，主要检查是语法编译：
+语法检查：
 
 ```bash
 uv run python -m compileall nomi tests -q
 ```
 
-## Run
-
-### 查看 CLI 帮助
-
-```bash
-uv run python -m nomi --help
-```
-
-### 启动主交互入口
-
-```bash
-uv run python -m nomi
-```
-
-或者安装成本机命令后运行：
-
-```bash
-uv tool install -e .
-nomi
-```
-
-### 主要运行方式
-
-当前真实可用的运行方式以 CLI 为主：
-
-- `nomi`
-- `nomi agent`
-
-其中当前启动链路已经是：
-
-```text
-CLI
-  ↓
-runtime
-  ↓
-Bus
-  ↓
-AgentLoop
-```
-
-当前没有正式的：
-
-- desktop runtime
-- web UI
-- API server 产品入口
-
-## Test
-
-### 运行全部 pytest
+全部测试：
 
 ```bash
 uv run python -m pytest -q
 ```
 
-### 运行局部测试
+局部测试：
 
 ```bash
 uv run python -m pytest tests/agent -q
-uv run python -m pytest tests/providers -q
-uv run python -m pytest tests/cron -q
+uv run python -m pytest tests/cli -q
+uv run python -m pytest tests/remote -q
+uv run python -m pytest tests/instance_channel -q
+uv run python -m pytest tests/tasks -q
 uv run python -m pytest tests/tools -q
-uv run python -m pytest tests/command -q
 ```
 
-### 运行 unittest 扫描
-
-```bash
-uv run python -m unittest discover -s tests -q
-```
-
-注意：
-
-- 当前这个命令可能发现 `0` 个 unittest 测试
-- 主测试体系是 `pytest`
-
-### 代码风格 / 静态检查
+Ruff：
 
 ```bash
 uv run ruff check nomi tests
 ```
 
-如果只看常见未使用导入 / 变量：
-
-```bash
-uv run ruff check nomi tests --select F401,F841
-```
-
-## Main Runtime Flow
-
-当前主链路可以先记成这一条：
-
-```text
-用户输入
-  ↓
-CLI
-  ↓
-Bus
-  ↓
-AgentLoop
-  ↓
-ContextBuilder + Session + Memory
-  ↓
-Provider / Tools
-  ↓
-OutboundMessage
-  ↓
-CLI 渲染
-```
-
-如果是 cron 触发，则链路是：
-
-```text
-workspace/cron/jobs.json
-  ↓
-CronService
-  ↓
-AgentLoop._run_cron_job()
-  ↓
-agent.process_direct(...)
-```
-
-如果是 skill，则当前实现是：
-
-```text
-~/.nomi/skills
-  ↓
-SkillRegistry 扫描
-  ↓
-ContextBuilder 注入 metadata
-  ↓
-模型自行决定是否读取 skill 内容
-```
-
-## Skills
-
-当前 skill 机制已经接入主链路，但属于最小实现。
-
-当前事实：
-
-- 全局 skill 根目录只有一个：`~/.nomi/skills`
-- 每个 skill 至少需要 `SKILL.md`
-- frontmatter 当前只认：
-  - `name`
-  - `description`
-- system prompt 里只注入 metadata，不自动注入 skill 正文
-
-当前没有：
-
-- marketplace
-- `/skills` 命令体系
-- 启用 / 禁用开关体系
-- 热重载
-- skill 自动沉淀机制
-
-## Cron
-
-当前 `cron` 机制已经接入主链路，但仍然是应用内调度，不是系统级调度。
-
-当前事实：
-
-- 调度文件在 `~/.nomi/workspace/cron/jobs.json`
-- `CronService` 负责后台轮询和到点执行
-- 只有 `nomi agent` 运行时，cron job 才会触发
-- 模型侧暴露四个调度工具：
-  - `cron_create`
-  - `cron_list`
-  - `cron_delete`
-  - `cron_update`
-- cron 到点后会回到 `AgentLoop.process_direct(...)` 跑一次独立执行
-
-当前没有：
-
-- `heartbeat`
-- `launchd`
-- Windows Task Scheduler
-- 系统通知中心
-- 后台 daemon
-
-## Code Style
-
-当前项目代码规范以仓库内现有实现约束为准：
-
-- 所有函数和方法必须有清晰中文 docstring
-- docstring 说明参数和返回值
-- 变量命名清晰易懂
-- 禁止无意义缩写
-- 注释使用中文
-- 注释只解释“为什么”，不要解释显而易见的“做了什么”
-- 不添加不必要的类、封装和中间层
-- `__init__.py` 只保留最小导出，不堆主逻辑
-- 改动以最小解、最优解为准
-
 ## Documentation Rules
 
-- `README.md` 只做项目介绍、快速开始和索引
-- `docs/` 只放正式项目文档
-- `PLAN.md` 是内部计划，不是正式文档
-- 文档必须反映真实代码，不写未落地能力
-- 改代码后，要同步相关文档
-
-### Docs Source Links
-
-`docs/` 下的文档引用源码时必须满足：
-
-- 路径以 `../` 开头
-- 精确到具体代码范围
-- 格式必须是 `#Lstart-Lend`
+- `README.md` 只做项目介绍、快速开始和索引。
+- `OPERATIONS.md` 放日常操作和排障命令。
+- `docs/` 放正式功能文档。
+- 文档只描述当前已落地能力，不写路线图、未落地设计或未实现能力。
+- 改代码后同步更新相关文档。
+- `docs/` 下源码链接必须以 `../` 开头，并精确到 `#Lstart-Lend`。
+- 根目录文档源码链接必须以 `./` 开头，并精确到 `#Lstart-Lend`。
 
 标准格式：
 
-```md
-[描述](../path/to/file.py#Lstart-Lend)
+```text
+描述 -> ../nomi/agent/loop.py#L87-L213
 ```
 
-### Module Completion Rules
+## Code Style
 
-一个“模块级”任务只有同时满足下面四项，才可以在项目层面称为“完成”：
-
-1. 代码实现完成
-2. 对应测试已新增或更新，并且实际跑过
-3. `docs/` 中对应模块文档已新增或更新
-4. `PLAN.md` 已回写当前状态、剩余事项和风险
-
-如果只完成了代码和测试，但没有完成文档或 `PLAN.md` 回写，那么这个模块最多只能描述为：
-
-- `代码实现完成，项目回写未完成`
-
-## Testing Rules
-
-- 测试只覆盖当前已有功能
-- 不接受只有 happy path 的测试
-- 主链路变更后要跑对应局部测试
-- 测试失败时先判断是环境问题还是代码问题
-- 默认不强制执行真实 `nomi agent` 多轮交互测试；只有用户明确要求时，才需要额外执行这条真实链路验证
-- 如果用户明确要求真实链路测试，这条测试不能只用 `--help` 代替，必须实际进入 CLI → runtime → AgentLoop 的启动链路
-- 如果真实测试因为 API Key、网络、TTY 或 provider 环境失败，必须在汇报里明确区分是“启动链路失败”还是“启动成功但运行环境失败”
-
-建议策略：
-
-- 改 provider，先跑 `tests/providers`
-- 改 agent，先跑 `tests/agent`
-- 改 cron，先跑 `tests/cron`、`tests/tools/test_cron_tool.py`、`tests/cli/test_runtime.py`
-- 改命令，先跑 `tests/command`
+- 函数和方法需要清晰中文 docstring。
+- docstring 说明参数和返回值。
+- 变量命名清楚，避免无意义缩写。
+- 注释使用中文。
+- 注释解释“为什么”，不要解释显而易见的“做了什么”。
+- 不添加不必要的类、封装和中间层。
+- `__init__.py` 只保留最小导出。
+- 改动以最小可维护解为准。
 
 ## Working Rules
 
-### Allowed
+允许：
 
-- 清理结构冗余
-- 修正文档和代码不同步
-- 统一已有实现风格
-- 补齐已有能力缺少的测试
-- 基于真实运行结果解释系统行为
+- 修正文档和代码不同步。
+- 清理结构冗余。
+- 统一已有实现风格。
+- 补齐已有能力缺少的测试。
+- 基于真实运行结果解释系统行为。
 
-### Not Allowed
+禁止：
 
-- 擅自改产品方向
-- 恢复已移除模块到默认链路
-- 增加兼容层
-- 增加迁移脚本
-- 为未来能力提前铺大框架
-- 没确认边界就跨模块大改
-- 用历史对话替代代码事实
-
-### Sub-agent Rules
-
-如果使用子 agent，主 agent 不能只转述子 agent 的自述，必须自己复核：
-
-- 实际改了哪些文件
-- 是否越过本轮模块边界
-- 测试是否真的跑过且通过
-- 是否完成了 `docs/` 回写
-- 是否完成了 `PLAN.md` 回写
-
-对子 agent 的验收必须以代码事实为准，不以子 agent 自己的总结为准。
+- 擅自改产品方向。
+- 恢复已移除能力到默认链路。
+- 增加过渡适配实现。
+- 增加迁移脚本。
+- 为未确认能力提前铺大框架。
+- 没确认边界就跨模块大改。
+- 用历史对话替代代码事实。
 
 ## Decision Priority
 
-遇到冲突或不确定时，按下面顺序判断：
+遇到冲突时按这个顺序判断：
 
-1. 当前代码事实
-2. 本文件中的项目边界和规则
-3. `docs/` 模块文档
-4. 测试
-5. 历史对话
-
-历史对话优先级最低。
-
-## Current Risks
-
-当前项目最容易出现的问题：
-
-- 文档落后于代码
-- 旧讨论被误当成当前实现
-- 想当然恢复已经删除的能力
-- 把最小主链路重新扩成复杂架构
-- 任务、skills、provider 这些已接入模块被当成“边缘功能”处理
-
-## Near-term Roadmap
-
-### `PLAN.md` 使用规则
-
-- `PLAN.md` 是后续实现计划，不是归档文件。
-- 每次开始做一个较大模块前，先读 `PLAN.md`，确认当前优先级、边界和剩余事项。
-- 每次做完一个模块后，必须回写 `PLAN.md`：
-  - 更新当前模块的完成情况
-  - 更新剩余模块顺序
-  - 记录新发现的风险、依赖和边界变化
-- 如果实现过程中发现原计划不符合代码事实，可以改 `PLAN.md`，但必须基于真实代码和真实运行结果。
-- 不要让 `PLAN.md` 漂成历史遗留清单。
-
-### 新 agent 的实际开工顺序
-
-如果新 agent 接手后要立刻开始干活，实际建议顺序是：
-
-1. 先读本文件和 `README.md`
-2. 再读 `docs/README.md` 和相关模块文档
-3. 确认当前工作区是否有未提交改动
-4. 明确本轮是在做：
-   - `PLAN.md` 中当前排在前面的模块
-5. 先检查 `PLAN.md` 是否需要根据当前代码事实调整
-6. 一次只推进一个方向，不混做
-7. 先做最小可运行收口，再考虑继续展开
-8. 做完一个模块后，必须同步两件事：
-   - 更新 `PLAN.md`
-   - 在 `docs/` 中新增或更新对应模块文档
-
-### 模块文档回写规则
-
-- 每次开始做一个较大模块前，先确认 `docs/` 中是否已经有对应文档。
-- 如果没有，对应实现完成后要补一份。
-- 如果已有，对应实现完成后要更新到和代码一致。
-- 文档必须讲“当前实现怎么工作”，不要把未来设想写成现状。
-- 文档优先覆盖：
-  - 入口
-  - 主流程
-  - 关键文件
-  - 关键数据结构
-  - 真实代码链接
-
-## Permissions And Safety
-
-- 允许修改的核心目录：
-  - `nomi/`
-  - `tests/`
-  - `docs/`
-  - 根目录项目说明文件
-- 不要做破坏性 shell 操作
-- 不要回滚别人未明确授权你回滚的改动
-- 不要访问未声明的秘密存储
-- 推送或网络失败时，要区分是认证问题、Git 凭证问题，还是网络 / 代理问题
+1. 当前代码事实。
+2. 本文件中的项目边界。
+3. `README.md` / `OPERATIONS.md` / `docs/`。
+4. 测试。
+5. 历史对话。
 
 ## One-line Principle
 
-Nomi 当前阶段只有一句话：
-
-**先相信代码事实，按规范做最小修改，把已有核心能力做清楚，不扩、不绕、不兼容。**
+**先相信代码事实，按规范做最小修改，把已有能力做清楚，不扩、不绕、不兼容。**

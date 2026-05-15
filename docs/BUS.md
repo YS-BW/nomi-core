@@ -1,140 +1,85 @@
-# 📨 Bus
+# 📨 Message Bus
 
-Nomi 当前的消息总线非常小，但它很关键 ✉️
+MessageBus 是 runtime 内部的消息管道。入口把消息放进 inbound，Agent 处理完后把结果发到 outbound，adapter 再把结果送回用户。
 
-因为主链路能解耦，靠的就是这层小总线。
+它很小，但它让 CLI、remote、channel 和 AgentLoop 不需要直接耦合。
 
-它只有两个 `asyncio.Queue`：
+## 🌟 Bus 做什么
 
-- inbound
-- outbound
+Bus 负责：
 
-实现文件：
+- 接收入口发来的 `InboundMessage`。
+- 暂存 Agent 产出的 `OutboundMessage`。
+- 支持 outbound subscriber fanout。
+- 让 remote 和 channel 可以并列监听输出。
 
-- [nomi/bus/events.py](../nomi/bus/events.py#L8-L36)
-- [nomi/bus/queue.py](../nomi/bus/queue.py#L8-L40)
+## 📥 InboundMessage
 
----
+InboundMessage 表示一条进入 Agent 的消息。
 
-## InboundMessage
+常见字段：
 
-定义在 [nomi/bus/events.py](../nomi/bus/events.py#L8-L25)。
-
-当前字段：
-
-| 字段 | 说明 |
+| 字段 | 含义 |
 |---|---|
-| `channel` | 来源通道，例如 `cli`、`weixin` |
+| `channel` | 来源入口，例如 `cli`、`weixin`、`remote`、`instance` |
 | `sender_id` | 发送者标识 |
-| `chat_id` | 会话 / 聊天对象标识 |
-| `content` | 主文本内容 |
-| `timestamp` | 收到消息时间 |
-| `media` | 附件或媒体路径列表 |
-| `metadata` | 渠道附加元数据 |
+| `chat_id` | 当前聊天对象 |
+| `content` | 文本内容 |
+| `media` | 图片或文件路径 |
+| `metadata` | 入口附加信息 |
 | `session_key_override` | 可选会话 key 覆盖 |
 
-### `session_key`
-
-如果没有 override，默认会话 key 就是：
+默认会话 key 是：
 
 ```text
 {channel}:{chat_id}
 ```
 
-对应属性：[nomi/bus/events.py](../nomi/bus/events.py#L21-L25)。
+## 📤 OutboundMessage
 
----
+OutboundMessage 表示 Agent 要发回某个入口的内容。
 
-## OutboundMessage
+常见字段：
 
-定义在 [nomi/bus/events.py](../nomi/bus/events.py#L27-L36)。
-
-当前字段：
-
-| 字段 | 说明 |
+| 字段 | 含义 |
 |---|---|
-| `channel` | 要发送到哪个通道 |
+| `channel` | 目标入口 |
 | `chat_id` | 目标聊天对象 |
-| `content` | 文本内容 |
+| `content` | 回复文本 |
 | `reply_to` | 可选回复目标 |
-| `media` | 附件列表 |
-| `metadata` | 附加控制字段 |
+| `media` | 附件 |
+| `metadata` | 流式、任务、事件等附加信息 |
 
----
+## 📣 Outbound Fanout
 
-## 当前 bus 的作用
+当前 outbound 支持 subscriber。
 
-bus 的作用不是复杂事件系统，而是把几层解耦开：
+这对统一 runtime 很关键：
 
-- 输入层不直接调用 `AgentLoop`
-- Agent 不直接写 CLI
-- channel 不直接拿 Agent 的内部返回值
+- remote 可以订阅 outbound，把结果变成 SSE/session event。
+- channel 可以订阅 outbound，只处理属于自己的消息。
+- 不再要求只有一个 consumer 独占 outbound queue。
 
-典型流向：
+## ⏰ 和全局提醒
 
-```text
-CLI / Channel
-  ↓ publish_inbound
-MessageBus.inbound
-  ↓ consume_inbound
-AgentLoop
-  ↓ publish_outbound
-MessageBus.outbound
-  ↓ consume_outbound
-CLI renderer / Channel runner
-```
+自动任务结果会先进入实例级 reminder store。
+各入口在运行时消费提醒，再把提醒写成自己的 outbound/session 事件。
 
----
+Bus 只负责运行时消息流，不是持久化提醒队列。
 
-## Metadata 驱动的出站语义
+## 🧱 边界
 
-当前很多出站消息不是靠“不同消息类型类”区分，而是靠 `metadata`。
+- Bus 是进程内机制，不是跨进程消息队列。
+- Bus 不负责保存历史，历史由 SessionManager 保存。
+- Bus 不负责鉴权，鉴权在 remote/channel/instance channel 层处理。
+- Bus 不应该承载任务定义真相，任务定义在 `tasks.json`。
 
-常见标记：
+## 🔎 相关代码
 
-| 标记 | 含义 |
+| 代码 | 说明 |
 |---|---|
-| `_stream_delta` | 正文流式增量 |
-| `_stream_end` | 一段流式回复结束 |
-| `_streamed` | 本轮最终消息已经通过流式发过 |
-| `_progress` | 普通进度提示 |
-| `_tool_transition` | 工具切换提示 |
-
-CLI 和 channel runner 都会根据这些 metadata 做不同处理。
-
-例如：
-
-- CLI outbound 消费：[nomi/cli/interactive.py](../nomi/cli/interactive.py#L132-L194)
-- channel outbound 路由：[nomi/channel/service/runtime.py](../nomi/channel/service/runtime.py#L98-L127)
-
----
-
-## Queue API
-
-`MessageBus` 当前 API 很薄：
-
-- `publish_inbound()`
-- `consume_inbound()`
-- `publish_outbound()`
-- `consume_outbound()`
-- `inbound_size`
-- `outbound_size`
-
-定义在 [nomi/bus/queue.py](../nomi/bus/queue.py#L8-L40)。
-
----
-
-## 为什么它保持极小很重要
-
-bus 这层越简单越好。
-
-如果把：
-
-- 重试
-- 状态机
-- channel 特有逻辑
-- provider 特有逻辑
-
-都塞进 bus，这层就会变成全局耦合点。
-
-当前 bus 还足够干净，这一点最好继续保持。
+| [nomi/bus/events.py](../nomi/bus/events.py#L8-L37) | InboundMessage / OutboundMessage |
+| [nomi/bus/queue.py](../nomi/bus/queue.py#L8-L73) | MessageBus 队列和 subscriber |
+| [nomi/agent/loop_runtime/dispatch.py](../nomi/agent/loop_runtime/dispatch.py#L34-L73) | AgentLoop 消费 inbound |
+| [nomi/remote/server.py](../nomi/remote/server.py#L85-L124) | remote 订阅 outbound |
+| [nomi/channel/service/runtime.py](../nomi/channel/service/runtime.py#L18-L117) | channel runner 消费输出 |

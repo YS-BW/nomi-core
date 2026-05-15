@@ -1,196 +1,72 @@
 # 📝 Slash Commands
 
-slash 命令就是对话里的“本地控制口令” 🪄
+Slash command 是对话里的本地控制命令。它们以 `/` 开头，在进入模型之前就会被 Nomi 本地处理。
 
-它们的特点是：
+这类命令适合做确定性的本地控制，例如开新会话、查看状态、触发 Dream、管理 skill。
 
-- 以 `/` 开头
-- 不发给模型 🚫🤖
-- 在进入模型前由本地路由拦截
+## 🌟 用户怎么用
 
----
+在对话里直接输入：
 
-## 路由器
+```text
+/status
+/new
+/dream
+/skill list
+```
 
-当前命令路由器是：
+这些内容不会发给模型，也不会被模型自由解释。
 
-- [nomi/command/router.py](../nomi/command/router.py#L15-L82)
+## 🧭 当前内置命令
 
-支持四类注册方式：
-
-- `priority()`
-- `exact()`
-- `prefix()`
-- `intercept()`
-
-### 当前分发顺序
-
-1. priority
-2. exact
-3. prefix
-4. interceptors
-
-这个顺序决定了为什么像 `/restart`、`/status` 会被更早处理。
-
----
-
-## 当前内置命令
-
-当前内置命令注册在：
-
-- [nomi/command/handlers/builtin.py](../nomi/command/handlers/builtin.py#L17-L72)
-
-完整列表：
-
-| 命令 | 说明 |
+| 命令 | 用途 |
 |---|---|
 | `/new` | 开始新会话 |
 | `/restart` | 重启当前进程 |
-| `/status` | 查看当前会话状态 |
-| `/dream` | 手动触发 Dream |
-| `/dream-log` | 查看 Dream 历史 |
-| `/dream-restore` | 回滚 Dream 历史 |
-| `/user-review` | 查看待确认画像候选 |
-| `/user-apply <id>` | 确认一条画像 |
-| `/user-reject <id>` | 拒绝一条画像 |
+| `/status` | 查看当前状态 |
+| `/dream` | 手动触发 Dream 整理 |
+| `/dream-log` | 查看最近一次 Dream 变更 |
+| `/dream-restore` | 恢复到之前的 Dream 版本 |
+| `/user-review` | 查看待确认的用户画像候选 |
+| `/user-apply <id>` | 确认并写入一条用户画像 |
+| `/user-reject <id>` | 忽略一条用户画像候选 |
 | `/user-show` | 查看当前 `USER.md` |
-| `/skill list` | 查看 skills |
-| `/skill install <source>` | 安装 skill |
-| `/skill uninstall <name>` | 卸载 skill |
-| `/help` | 查看帮助 |
+| `/skill list` | 查看已安装 skills |
+| `/skill install <source>` | 安装一个 skill |
+| `/skill uninstall <name>` | 卸载一个 skill |
+| `/help` | 查看可用命令 |
 
----
+## ⚡ 优先级命令
 
-## 会话命令
+`/restart` 和 `/status` 属于 priority command。
 
-### `/new`
+它们会在消息进入普通会话处理前优先执行，避免被当前 session 的长任务或模型调用影响。
 
-作用：
+## 🧠 和模型工具的区别
 
-- 清空当前短期会话
-- 把当前未归档消息交给 consolidator 后台归档
+Slash command 是用户直接控制 Nomi 的本地命令。
 
-处理函数：
+工具是模型在回答过程中主动调用的能力。
 
-- [nomi/command/handlers/session.py](../nomi/command/handlers/session.py#L9-L24)
+例如：
 
----
+- 用户输入 `/skill list`：直接走 slash command。
+- 用户说“看看我有哪些 skill”：模型可以调用 skill 相关工具。
 
-## Runtime 命令
+## 🧱 边界
 
-### `/restart`
+- Slash command 不发给模型。
+- instance 来源消息不会走普通用户快捷命令语义。
+- 复杂业务能力优先做成工具或 CLI 命令，不要把 slash command 扩成另一个完整命令系统。
 
-当前不是“重建一遍 Python 对象”，而是：
+## 🔎 相关代码
 
-- 把重启提示写到环境变量
-- `asyncio.create_task()` 延迟 1 秒
-- `os.execv()` 原地重启当前进程
-
-见 [nomi/command/handlers/runtime.py](../nomi/command/handlers/runtime.py#L15-L37)。
-
-### `/status`
-
-生成的是“当前会话运行状态”，不是全局 `nomi status` 表格。
-
-内容格式化在：
-
-- [nomi/command/runtime_status.py](../nomi/command/runtime_status.py#L8-L64)
-
-处理函数：
-
-- [nomi/command/handlers/runtime.py](../nomi/command/handlers/runtime.py#L40-L64)
-
-### `/help`
-
-帮助文案来自：
-
-- [nomi/command/handlers/builtin.py](../nomi/command/handlers/builtin.py#L35-L46)
-
----
-
-## Dream 命令
-
-当前 Dream 命令实现文件：
-
-- [nomi/command/handlers/dream.py](../nomi/command/handlers/dream.py#L10-L200)
-
-### `/dream`
-
-立即触发一次后台 Dream。
-
-### `/dream-log`
-
-查看最近一次或指定 SHA 的 Dream 变更。
-
-### `/dream-restore`
-
-如果不带参数：
-
-- 列出最近可恢复版本
-
-如果带参数：
-
-- 恢复到指定 Dream 历史状态
-
----
-
-## User Profile 命令
-
-这组命令是当前 `USER.md` 画像确认链路的一部分。
-
-处理文件：
-
-- [nomi/command/handlers/user_profile.py](../nomi/command/handlers/user_profile.py#L9-L66)
-
-### `/user-review`
-
-列出当前 session 下待确认候选。
-
-### `/user-apply <id>`
-
-确认一条候选并写入 `USER.md`。
-
-### `/user-reject <id>`
-
-拒绝一条候选。
-
-### `/user-show`
-
-直接显示当前 `USER.md` 内容。
-
----
-
-## Skill 命令
-
-skill 命令统一走：
-
-- [nomi/command/handlers/skills.py](../nomi/command/handlers/skills.py#L11-L98)
-
-当前支持：
-
-- `/skill list`
-- `/skill install <source>`
-- `/skill uninstall <name>`
-
-它们最终会调用：
-
-- `SkillRegistry`
-- `SkillManager`
-
----
-
-## 当前边界
-
-`command/` 这层当前只负责：
-
-- 命令协议
-- 路由
-- handler 组织
-
-它不负责：
-
-- 执行模型对话
-- 管理 instance runtime service
-- 管理 CLI 渲染
-
-如果把业务拼装逻辑继续塞进命令层，会让 slash 命令重新变得很难维护。
+| 代码 | 说明 |
+|---|---|
+| [nomi/command/router.py](../nomi/command/router.py#L15-L82) | 命令路由器 |
+| [nomi/command/handlers/builtin.py](../nomi/command/handlers/builtin.py#L17-L72) | 内置命令注册 |
+| [nomi/command/handlers/runtime.py](../nomi/command/handlers/runtime.py#L1-L83) | `/status`、`/restart`、`/help` |
+| [nomi/command/handlers/session.py](../nomi/command/handlers/session.py#L1-L24) | `/new` |
+| [nomi/command/handlers/dream.py](../nomi/command/handlers/dream.py#L1-L160) | Dream 命令 |
+| [nomi/command/handlers/skills.py](../nomi/command/handlers/skills.py#L1-L98) | skill 命令 |
+| [nomi/command/handlers/user_profile.py](../nomi/command/handlers/user_profile.py#L1-L66) | 用户画像命令 |

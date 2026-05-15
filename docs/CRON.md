@@ -1,233 +1,229 @@
-# ⏰ Cron
+# ⏰ 自动任务与提醒
 
-Nomi 当前的调度系统是应用内 cron，不是系统级守护进程 ⏰
+Nomi 的自动任务让你把“稍后提醒我”“每天提醒我”“每隔一段时间做一次”这类事情交给当前实例处理。
 
-也就是说：
+它不是系统级定时器，而是 Nomi 实例运行时的一部分：实例在运行，任务才会按时触发；实例停掉，任务不会在系统后台独立执行。
 
-- 只有 agent/runtime 真正在跑时，任务才会触发 ▶️
-- 它不依赖系统 `crontab`
-- 它不依赖 `launchd`
-- 它不依赖 Windows Task Scheduler
+## 🌟 功能概览
 
----
+自动任务适合这些场景：
 
-## 代码位置
+- 一次性延时提醒，例如“10 分钟后提醒我看锅”。
+- 一次性定点提醒，例如“今晚 8 点提醒我给 xmy 发消息”。
+- 每天固定时间提醒，例如“每天早上 9 点提醒我量体重”。
+- 固定间隔任务，例如“每 30 分钟提醒我喝水”。
+- 到点后让 Nomi 先执行一段指令，再把结果作为提醒发出来。
 
-- 类型定义：[nomi/cron/types.py](../nomi/cron/types.py)
-- 调度服务：[nomi/cron/service.py](../nomi/cron/service.py#L25-L360)
-- AI 工具：[nomi/agent/tools/cron.py](../nomi/agent/tools/cron.py)
-- Agent 接线：[nomi/agent/loop.py](../nomi/agent/loop.py#L160-L163)
+## 🚫 不适合什么
 
----
+自动任务不适合这些场景：
 
-## 存储位置
+- 要求在 Nomi 完全没运行时也触发的系统级闹钟。
+- 需要操作系统保证强实时执行的任务。
+- 用 shell 的 `sleep`、`crontab`、`launchd` 或 `schtasks` 伪装出来的后台任务。
 
-当前 cron 派生调度状态默认保存在：
+## 💬 用户怎么用
+
+用户不需要记住底层工具名，直接用自然语言说清楚“什么时候”和“要提醒什么”即可。
+
+例如：
 
 ```text
-~/.nomi/workspace/cron/jobs.json
+10 分钟后提醒我喝水。
+今晚 8 点提醒我给小美发消息。
+每天早上 9 点提醒我量体重。
+每 30 分钟提醒我站起来活动一下。
+帮我看看现在的天气，明早 8 点提醒我是否要带伞。
 ```
 
-路径定义见 [nomi/config/paths.py](../nomi/config/paths.py#L37-L44)。
+Nomi 会把这些请求转换成自动任务。任务到点后，Nomi 会执行任务指令，并把结果投递到当前实例中可接收提醒的入口。
 
----
+## 📣 默认投递方式
 
-## 调度模型
+自动任务默认使用“全局提醒”。
 
-当前支持三种调度方式：
+也就是说，如果任务没有明确限定投递入口，任务结果会发给当前实例里正在运行且可接收提醒的入口，例如：
 
-| 类型 | 说明 |
+- desktop / remote
+- 微信 channel
+- CLI
+
+用户说“提醒我”时，默认就是全局提醒。Nomi 不应该追问“发到哪里”，也不应该默认只发到创建任务的那个入口。
+
+如果用户明确要求限定入口，可以只投递到指定渠道：
+
+- “只发到微信”
+- “只在 desktop 提醒我”
+- “只发到 CLI”
+
+当前支持的投递目标是：
+
+| 目标 | 含义 |
 |---|---|
-| `at` | 一次性在某个时间触发 |
-| `every` | 固定间隔反复触发 |
-| `cron` | 标准 cron 表达式 |
+| `weixin` | 微信 channel |
+| `remote` | desktop / remote |
+| `cli` | 当前 CLI agent |
 
-计算下一次触发时间的逻辑在 [nomi/cron/service.py](../nomi/cron/service.py#L81-L111)。
+## 🕒 四种时间类型
 
----
+### 1. 延时一次
 
-## 运行机制
-
-当前 cron 运行机制大致是：
+适合“过一会儿提醒我”。
 
 ```text
-TaskRunner.start_scheduler()
-  ↓
-抢实例级 scheduler owner 锁
-  ↓
-从 tasks.json 重建 task 类 jobs
-  ↓
-CronService.start()
-  ↓
-load jobs.json
-  ↓
-recompute next_run_at_ms
-  ↓
-arm timer
-  ↓
-到点后 run_due_jobs()
-  ↓
-_execute_job()
-  ↓
-回调 on_job(job)
+5 分钟后提醒我关火。
 ```
 
-关键代码：
+对应能力是 `task_create_after`。
 
-- scheduler owner 启动：[nomi/tasks/runner.py](../nomi/tasks/runner.py#L245-L278)
-- task reconcile：[nomi/tasks/runner.py](../nomi/tasks/runner.py#L221-L243)
-- start：[nomi/cron/service.py](../nomi/cron/service.py#L207-L216)
-- run_due_jobs：[nomi/cron/service.py](../nomi/cron/service.py#L209-L219)
-- execute_job：[nomi/cron/service.py](../nomi/cron/service.py#L221-L260)
+### 2. 定点一次
 
----
-
-## 和 Agent 的接线
-
-`AgentLoop` 初始化时会创建 `CronService + TaskRunner`，并把：
-
-```python
-self.cron_service.on_job = self._run_cron_job
-```
-
-接上去。
-
-代码位置：
-
-- [nomi/agent/loop.py](../nomi/agent/loop.py#L162-L167)
-- [nomi/agent/loop_runtime/dispatch.py](../nomi/agent/loop_runtime/dispatch.py#L34-L47)
-
-也就是说：
-
-- task 定义真源在 `tasks.json`
-- `CronService` 只负责派生调度状态和到点执行
-- 到点后最终还是回到 Agent 主链路执行
-- 任务结果会被写入实例级共享提醒队列，再由当前已启动入口各自消费一份
-
----
-
-## 任务真源与单 owner
-
-当前任务系统已经固定为：
-
-- `tasks.json` 是任务定义真源
-- `cron/jobs.json` 是派生调度状态
-- 同一实例下只有一个 runtime 能成为 task scheduler owner
-
-实现要点：
-
-- owner runtime 通过实例级锁文件持有 scheduler 资格
-- follower runtime 仍然可以创建、更新、删除任务定义
-- owner runtime 会在主循环 idle tick 中轮询 `tasks.json` 变化，并重建 task 类 cron
-
-这意味着同一实例下：
-
-- 不会再让 `remote` 和 `channel` 同时各自启动自己的 task cron
-- 新任务不依赖“必须在当前运行中的那一侧创建”才会被调度看到
-- desktop/CLI 创建的任务也不再只回创建端，而是按实例级全局提醒语义 fanout 到所有已启动入口
-
----
-
-## 全局提醒投递
-
-当前任务结果默认不是简单的单个 `target_channel/chat_id` 单播，而是：
+适合“某个具体时间提醒我”。
 
 ```text
-task run completed
-  ↓
-写入实例级 reminders.json
-  ↓
-remote / channel / cli runtime 在 idle tick 中各自消费
-  ↓
-每个已启动入口收到一份提醒
+今天 21:30 提醒我回消息。
 ```
 
-如果任务显式设置了 `target_channels`，投递范围会被限制到指定入口：
+对应能力是 `task_create_at`。
 
-- 不设置或设置为空：全局提醒，投递给当前实例里正在运行且可接收提醒的入口
-- `["weixin"]`：只投递微信
-- `["cli"]`：只投递 CLI
-- `["remote"]`：只投递 remote / desktop
-- 多个值：只投递这些入口
+### 3. 每天重复
 
-当前共享提醒记录默认保存在：
+适合“每天固定时间做同一件事”。
 
 ```text
-~/.nomi/tasks/reminders.json
+每天早上 9 点提醒我写日报。
 ```
 
-当前 fanout 语义固定为：
+对应能力是 `task_create_daily`。
 
-- `remote`：
-  - 广播给当前所有已连接 desktop 客户端
-- `channel`：
-  - 投递给该渠道最近活跃的会话
-- `cli`：
-  - 只投递给当前正在运行的 `nomi agent`
+### 4. 固定间隔重复
 
-这套语义的重点是：
+适合“每隔一段时间提醒一次”。
 
-- 创建入口和投递入口已经解耦
-- 默认情况下，同一实例里只要某个入口当前正在运行，它就能各自收到同一条任务提醒
-- 如果任务设置了 `target_channels`，则只向指定入口投递
-- 当前公开 Agent 工具支持可选 `target_channels`
-- remote 协议当前还没有 `target_channels` 字段；desktop 直接显式创建定向任务需要先走 `nomi-protocol` 变更流程
+```text
+每 45 分钟提醒我休息一下。
+```
 
----
+对应能力是 `task_create_every`。
 
-## AI 可以调用哪些 cron 工具
+## ✍️ 任务内容怎么写
 
-当前暴露给模型的工具固定是：
+任务内容只应该描述“到点后要做什么”，不要把时间和投递入口重复写进去。
 
-- `cron_create`
-- `cron_list`
-- `cron_delete`
-- `cron_update`
+正确写法：
 
-工具注册在 [nomi/agent/tools/bootstrap.py](../nomi/agent/tools/bootstrap.py#L82-L84)。
+```text
+提醒用户喝水。
+检查今天的天气，并提醒用户是否需要带伞。
+问一下 xmy 的 Nomi，今天晚上几点方便。
+```
 
-当前没有：
+避免写法：
 
-- `/cron` slash 命令
-- 旧的 `/task`
+```text
+10 分钟后提醒用户喝水。
+明早 8 点发到微信提醒用户带伞。
+```
 
----
+时间应该由调度字段表达，投递入口应该由目标渠道表达。这样任务列表、重排程和全局投递才会保持清楚。
 
-## 防重复与运行状态
+## 🧭 查看和管理任务
 
-`CronService` 里现在已经有一层“短窗口重复 job 复用”逻辑：
+Nomi 可以帮用户查看、修改、停用或删除自动任务。
 
-- 调度参数一样
-- message 一样
-- channel/chat_id 一样
-- 创建时间相近
+常见说法：
 
-就直接复用已有 job，而不是新建一条。
+```text
+看看我现在有哪些自动任务。
+把明天早上的提醒改成 8 点半。
+把喝水提醒停掉。
+删除那个吃饭提醒。
+把日报提醒内容改成提醒我先整理昨天的工作。
+```
 
-逻辑在 [nomi/cron/service.py](../nomi/cron/service.py#L277-L324)。
+当前任务管理能力包括：
 
-### 运行历史
+| 能力 | 用途 |
+|---|---|
+| `task_list` | 查看所有任务 |
+| `task_get` | 查看单个任务详情 |
+| `task_delete` | 删除任务 |
+| `task_enable` | 启用任务 |
+| `task_disable` | 停用任务 |
+| `task_update_instruction` | 修改任务内容 |
+| `task_reschedule_after` | 改成延时一次 |
+| `task_reschedule_at` | 改成定点一次 |
+| `task_reschedule_daily` | 改成每天重复 |
+| `task_reschedule_every` | 改成固定间隔重复 |
 
-每个 job 还会保留有限 run history：
+## 📌 状态与结果
 
-- 当前最多保留 20 条
+一条自动任务通常会经历这些状态：
 
-见 [nomi/cron/service.py](../nomi/cron/service.py#L28-L30)。
+| 状态 | 含义 |
+|---|---|
+| `pending` | 已创建，等待触发 |
+| `running` | 到点后正在执行 |
+| `delivered` | 执行完成，结果已进入提醒出口 |
+| `failed` | 执行失败或超时 |
+| `cancelled` | 已取消 |
 
----
+一次性任务执行完后不会继续触发。重复任务会继续保留，并等待下一次触发。
 
-## 重要限制
+如果任务执行失败，Nomi 也会走统一提醒出口，把失败信息投递给用户，而不是让任务一直卡在运行中。
 
-当前 cron / task 调度的产品边界一定要记住：
+## 🧱 运行边界
 
-- 它是应用内调度
-- 不是系统后台常驻服务
-- 如果当前实例没有任何拿到 scheduler owner 的 runtime 在跑，就不会触发
+自动任务属于实例级能力。
 
-所以它适合：
+当前模型是：
 
-- 提醒
-- 周期性 agent 行为
-- 会回到聊天上下文里的触发任务
+- `tasks.json` 保存任务定义。
+- `cron/jobs.json` 保存派生出来的触发状态。
+- 同一个实例只有一个 scheduler owner 负责实际触发任务。
+- desktop、微信、CLI 创建的任务都会进入同一个实例任务系统。
+- 任务结果默认通过实例级全局提醒投递给当前已启动入口。
 
-但它仍然不适合被文档写成“真正的系统级定时器”。
+因此需要注意：
+
+- 实例没有运行时，任务不会被触发。
+- 入口没运行时，它不会收到当下这次提醒。
+- 如果任务限定了 `target_channels`，不在目标列表里的入口不会收到。
+- 如果可投递入口数量为零，任务本身仍会完成状态收尾，但不会凭空打开一个新入口。
+
+## 🤝 和 instance 沟通的关系
+
+自动任务可以和 instance 间沟通配合使用。
+
+例如用户可以说：
+
+```text
+明天上午 10 点问一下 xmy 的 Nomi，晚上有没有空。
+```
+
+这类任务到点后会让本机 Nomi 调用 instance 沟通能力，把消息发给另一个实例，并把对方回复作为任务结果提醒给用户。
+
+是否能让对方实例创建任务、执行文件操作或做高权限动作，取决于对方授予本实例的 instance 权限。没有权限时，相关工具会直接返回当前会话没有权限，模型再根据工具结果向用户解释。
+
+## ✅ 一句话原则
+
+自动任务只负责“在实例运行时，到点让 Nomi 做一件事，并把结果提醒给用户”。
+
+它不是系统闹钟，也不是独立后台调度平台。默认投递是全局提醒，只有用户明确要求时才限制到某个渠道。
+
+## 🔎 相关代码
+
+如果需要继续看实现，可以从这些入口开始：
+
+| 代码 | 说明 |
+|---|---|
+| [nomi/agent/tools/tasks.py](../nomi/agent/tools/tasks.py#L14-L376) | 暴露给模型的 `task_*` 工具、参数校验、全局提醒目标参数 |
+| [nomi/tasks/models.py](../nomi/tasks/models.py#L10-L124) | 自动任务的数据结构、运行状态和 `target_channels` 字段 |
+| [nomi/tasks/store.py](../nomi/tasks/store.py#L20-L111) | `tasks.json` 的读写、创建、更新和删除 |
+| [nomi/tasks/runner.py](../nomi/tasks/runner.py#L34-L92) | `TaskRunner` 的基础配置、支持的提醒目标和目标规范化 |
+| [nomi/tasks/runner.py](../nomi/tasks/runner.py#L106-L155) | 延时、定点、每天、间隔等时间参数到调度对象的转换 |
+| [nomi/tasks/runner.py](../nomi/tasks/runner.py#L164-L334) | 从任务定义重建派生 cron 触发器、恢复陈旧 running 任务 |
+| [nomi/tasks/runner.py](../nomi/tasks/runner.py#L353-L431) | 全局提醒目标解析、提醒入队、consumer 投递标记 |
+| [nomi/cron/service.py](../nomi/cron/service.py#L25-L285) | 底层时间触发器的持久化、计时、到点执行和 run history |
+| [nomi/tasks/reminder_store.py](../nomi/tasks/reminder_store.py#L19-L181) | 实例级提醒队列、投递状态和文件锁保护 |
+| [nomi/runtime/service/runner.py](../nomi/runtime/service/runner.py#L154-L185) | instance runtime 启动时注册 remote / channel 提醒 consumer |

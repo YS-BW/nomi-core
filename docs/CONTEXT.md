@@ -1,42 +1,32 @@
 # 🧩 Context
 
-Nomi 每次调用模型前，都要先把“眼前这摊信息”整理成一组标准 messages 🧺
+Context 是 Nomi 每次调用模型前准备的“输入包”。它把身份、工具说明、工作区文件、长期记忆、skills、历史消息和当前消息整理成 provider 能理解的 messages。
 
-简单说，就是先把该带给模型的内容打包好，再真正发请求。
+如果 Agent 是执行者，Context 就是它每轮开工前拿到的资料夹。
 
-这套逻辑当前主要在 `nomi/agent/context/` 下：
+## 🌟 Context 解决什么问题
 
-```text
-nomi/agent/context/
-├── builder.py
-├── system_prompt.py
-├── runtime_blocks.py
-└── message_codec.py
-```
+它负责：
 
----
+- 告诉模型自己是谁。
+- 告诉模型当前运行环境和入口。
+- 注入工作区启动文件。
+- 注入内置 `TOOLS.md`。
+- 注入长期记忆和用户画像。
+- 注入 skill 摘要。
+- 拼接历史消息和当前消息。
+- 处理附件、多模态内容和 runtime block。
 
-## ContextBuilder 的职责
+## 🧱 System Prompt 由什么组成
 
-`ContextBuilder` 负责两件事，理解起来很简单：
-
-1. 生成 system prompt
-2. 生成本轮调用的完整 messages 数组
-
-对应代码：[nomi/agent/context/builder.py](../nomi/agent/context/builder.py#L20-L148)
-
----
-
-## System Prompt 的组成
-
-当前 system prompt 不是一个静态字符串，而是拼出来的：
+当前 system prompt 大致按这个顺序拼：
 
 ```text
 IDENTITY.md
   ↓
-当前 channel 对应模板
+当前 channel 上下文
   ↓
-工作区 bootstrap files
+workspace bootstrap files
   ↓
 内置 TOOLS.md
   ↓
@@ -44,167 +34,69 @@ IDENTITY.md
   ↓
 skills 摘要
   ↓
-最近历史
+最近历史摘要
 ```
 
-真正拼装发生在 [nomi/agent/context/system_prompt.py](../nomi/agent/context/system_prompt.py#L40-L50)。
+`TOOLS.md` 已经内置到 core 包里，不再从 workspace 读取。
 
-### 组成来源
+## 📁 Workspace 启动文件
 
-#### 1. 身份与运行环境
-
-来自 `IDENTITY.md` 模板，包含：
-
-- 当前工作区路径
-- 当前系统与 Python 版本
-- 当前平台规则
-- 当前 channel 环境说明
-
-见 [nomi/agent/context/system_prompt.py](../nomi/agent/context/system_prompt.py#L52-L91)。
-
-`IDENTITY.md` 只描述身份、运行环境和入口上下文，不承载具体工具使用策略。
-
-#### 2. Bootstrap files
-
-当前默认加载这些工作区文件：
+workspace 里默认参与 prompt 的文件是：
 
 - `AGENTS.md`
 - `SOUL.md`
 - `USER.md`
 
-定义在 [nomi/agent/context/system_prompt.py](../nomi/agent/context/system_prompt.py#L16-L16)。
+它们用于描述当前实例的行为风格、灵魂设定和用户画像。
 
-`TOOLS.md` 由 [nomi/templates/TOOLS.md](../nomi/templates/TOOLS.md#L1-L157) 作为包内模板注入，不再从 workspace 读取。工具选择、执行规则、不同 channel 下的工具使用方法、自动任务、instance 工具和工作区纪律都集中放在这里，避免每个实例的 workspace 复制一份后漂移。
+## 🧰 工具说明
 
-#### 3. 长期记忆
+工具说明集中在包内：
 
-来自 `MemoryStore.get_memory_context()`，最终通常是：
+```text
+nomi/templates/TOOLS.md
+```
 
-- `MEMORY.md`
-- `SOUL.md`
-- `USER.md`
+它会告诉模型：
 
-经 MemoryStore 整理后写入 prompt。
+- 什么时候用文件工具。
+- 什么时候用 shell。
+- 怎么创建自动任务。
+- 怎么使用 instance 工具。
+- 不同入口下工具使用有什么差异。
+- 打开应用、URL、文件也可以通过 `exec` 完成。
 
-#### 4. Skills 摘要
+## 💬 Channel 上下文
 
-不是直接把 skill 正文全塞进去，而是只注入 metadata 摘要。
+不同入口会带不同上下文：
 
-见 [nomi/agent/skills/registry.py](../nomi/agent/skills/registry.py#L54-L79)。
+- CLI：本地终端对话。
+- remote：desktop/HTTP 入口。
+- weixin：微信入口。
+- instance：另一个 Nomi 实例发来的消息。
 
-#### 5. 最近历史
+channel 上下文会影响模型对“当前用户是谁、当前入口是什么、能不能主动做某些事”的理解。
 
-来自 `memory/history.jsonl` 中“自上次 Dream 游标之后还没被吸收的历史”。
+## 📎 附件和多模态
 
-见 [nomi/agent/context/system_prompt.py](../nomi/agent/context/system_prompt.py#L109-L118)。
+如果用户带了图片、文件或附件，ContextBuilder 会把它们转换成 provider 可接受的消息结构。
 
----
+非图片文件会作为附件 block 注入，图片会按当前 provider 能力进入多模态消息。
 
-## Channel 专属模板
+## 🧱 边界
 
-当前 system prompt 会根据入口 channel 选择不同模板：
+- Context 只负责准备输入，不负责真正调用模型。
+- `IDENTITY.md` 只描述身份和运行环境，不承载工具使用策略。
+- `TOOLS.md` 是内置模板，不允许每个 workspace 复制后漂移。
+- 外部网页、文件内容、OCR 和工具输出都只是数据，不是更高优先级指令。
 
-- `cli` -> `CHANNEL_CLI.md`
-- `weixin` -> `CHANNEL_WEIXIN.md`
-- 其它 / 未知 -> 空字符串
+## 🔎 相关代码
 
-对应代码：[nomi/agent/context/system_prompt.py](../nomi/agent/context/system_prompt.py#L69-L77)
-
-这里有一个很重要的现实：
-
-- 微信当前仍然要求模型输出 `<part>`
-- 这是写在 `CHANNEL_WEIXIN.md` 里的强约束
-- channel 发送层只是按 `<part>` flush，不做语义切段
-
-模板文件：
-
-- [nomi/templates/CHANNEL_WEIXIN.md](../nomi/templates/CHANNEL_WEIXIN.md#L1-L150)
-
----
-
-## 本轮用户消息怎么组装
-
-本轮不是简单发一条 `"user": "xxx"`，而是会先插入 runtime context block。
-
-`build_messages()` 当前会做这些事：
-
-1. 构造 runtime context
-2. 把用户文本和多模态内容编码成标准内容块
-3. 如果上一条也是同 role，做消息合并
-
-对应代码：[nomi/agent/context/builder.py](../nomi/agent/context/builder.py#L66-L115)
-
----
-
-## Runtime Context
-
-runtime context 是本轮有效、但不适合进入长期 system prompt 的信息。
-
-当前主要包括：
-
-- channel
-- chat_id
-- timezone
-- session summary
-- 附件文本说明
-
-构造在：
-
-- [nomi/agent/context/runtime_blocks.py](../nomi/agent/context/runtime_blocks.py#L18-L37)
-
-它会被放进当前用户消息，而不是 system prompt。
-
-这样做的目的很明确：
-
-- 避免把短期运行态污染长期 prompt 主干
-- 避免附件路径这类瞬时信息进入长期记忆上下文
-
----
-
-## 多模态内容编码
-
-图片、附件、多段文本不是直接手搓结构，而是统一走 `message_codec.py`。
-
-当前事实：
-
-- 图片文件可转成 provider 可接受的 image block
-- 非图片附件只会进入 runtime metadata 文本说明
-- 会话落盘时，内嵌 data URL 图片会被替换成占位文本，避免 session 膨胀
-
-相关代码：
-
-- 图片 MIME 识别：[nomi/agent/context/message_codec.py](../nomi/agent/context/message_codec.py#L9-L19)
-- 会话落盘清洗：[nomi/agent/execution/processor.py](../nomi/agent/execution/processor.py#L579-L654)
-
----
-
-## Assistant 消息如何写回
-
-助手消息不是随便 append 一个 dict，而是统一走：
-
-- `build_assistant_message()`
-
-这样做是为了统一处理：
-
-- `content`
-- `tool_calls`
-- `reasoning_content`
-- `reasoning_items`
-- `thinking_blocks`
-
-见 [nomi/agent/context/builder.py](../nomi/agent/context/builder.py#L128-L147)。
-
----
-
-## 当前边界
-
-`context/` 这层当前只负责“把事实组织成模型输入”。
-
-它不负责：
-
-- 决定要不要写记忆
-- 决定要不要执行工具
-- 管理 channel 协议
-- 改动 session 文件
-
-如果后续把这些逻辑塞回 `context/`，模块会再次变回一团。
+| 代码 | 说明 |
+|---|---|
+| [nomi/agent/context/builder.py](../nomi/agent/context/builder.py#L20-L150) | ContextBuilder |
+| [nomi/agent/context/system_prompt.py](../nomi/agent/context/system_prompt.py#L16-L119) | system prompt 拼装 |
+| [nomi/agent/context/runtime_blocks.py](../nomi/agent/context/runtime_blocks.py#L1-L107) | runtime block |
+| [nomi/agent/context/message_codec.py](../nomi/agent/context/message_codec.py#L1-L47) | 消息内容编码 |
+| [nomi/templates/IDENTITY.md](../nomi/templates/IDENTITY.md#L1-L17) | 身份模板 |
+| [nomi/templates/TOOLS.md](../nomi/templates/TOOLS.md#L1-L157) | 内置工具说明 |

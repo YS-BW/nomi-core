@@ -1,287 +1,127 @@
 # 💻 CLI
 
-CLI 是 Nomi 当前最主要、也是你最常接触到的入口 ⌨️
+CLI 是 Nomi 的本地命令入口。它既能直接和 Agent 对话，也能管理实例、remote、channel、provider 配置和运行状态。
 
-它不只是“命令分发器”，而是真正的用户交互层：
+当前最重要的理解是：
 
-- 负责解析 root 命令和子命令 🧭
-- 负责交互循环 🔄
-- 负责流式输出渲染 ✨
-- 负责把用户输入变成 `InboundMessage` 📨
+- `nomi agent` 是终端对话入口。
+- `nomi instance` 是后台 runtime 管理入口。
+- `nomi remote` 和 `nomi channel` 主要负责配置，不再单独启动 service。
 
----
+## 🚀 常用命令
 
-## 根命令
+| 命令 | 用途 |
+|---|---|
+| `nomi onboard` | 初始化默认实例和配置 |
+| `nomi agent` | 打开终端交互对话 |
+| `nomi agent --message "..."` | 发一条单次消息 |
+| `nomi instance start` | 后台启动默认实例 runtime |
+| `nomi instance run` | 前台运行默认实例 runtime |
+| `nomi instance stop` | 停止实例 runtime |
+| `nomi instance restart` | 重启实例 runtime |
+| `nomi instance status` | 查看实例状态 |
+| `nomi instance services` | 查看所有实例服务状态 |
+| `nomi remote enable` | 启用 remote adapter 配置 |
+| `nomi channel enable weixin` | 启用微信 channel 配置 |
 
-当前 `nomi --help` 可见的根命令主要有：
+## 💬 终端对话
 
-- `nomi onboard`
-- `nomi instance`
-- `nomi agent`
-- `nomi channel`
-- `nomi remote`
-- `nomi status`
-
-根入口定义在 [nomi/cli/app.py](../nomi/cli/app.py#L25-L87)。
-
-### 根级选项
-
-当前 root callback 里固定有这些全局选项：
-
-- `--version`
-- `--install-completion`
-- `--show-completion`
-
-对应代码：[nomi/cli/app.py](../nomi/cli/app.py#L48-L87)
-
----
-
-## `nomi agent`
-
-### 两种运行模式
-
-`nomi agent` 当前有两种形态：
-
-1. 交互模式
-2. 单次消息模式
-
-命令定义在 [nomi/cli/commands/agent.py](../nomi/cli/commands/agent.py#L33-L128)。
-
-### 交互模式
+直接进入交互模式：
 
 ```bash
 nomi agent
 ```
 
-特点：
-
-- 进入 prompt_toolkit 交互循环
-- runtime 在后台启动
-- 输入一条消息，发布到 bus
-- agent 输出流式回显到终端
-
-实际循环在 [nomi/cli/interactive.py](../nomi/cli/interactive.py#L54-L313)。
-
-### 单次模式
+发送单次消息：
 
 ```bash
-nomi agent -m "帮我看一下这个目录"
+nomi agent --message "帮我总结一下今天的任务"
 ```
 
-特点：
+交互模式会启动本地 runtime，然后把用户输入送入 AgentLoop。模型回复会流式渲染到终端。
 
-- 调用 `runtime.run_once()`
-- 一次请求，一次回复
-- 适合脚本或快速测试
+## 🧩 实例管理
 
-对应逻辑在 [nomi/cli/commands/agent.py](../nomi/cli/commands/agent.py#L83-L110)。
+默认实例名是 `default`，默认 root 是 `~/.nomi`。
 
-### 常用参数
+常用命令：
 
-| 参数 | 说明 |
-|---|---|
-| `-m, --message` | 单次发送的消息 |
-| `-s, --session` | 会话 key，默认 `cli:direct` |
-| `-w, --workspace` | 覆盖工作区路径 |
-| `-c, --config` | 覆盖配置文件路径 |
-| `--instance` | 按实例名解析当前实例 |
-| `--instance-root` | 直接指定实例 root |
-| `--markdown / --no-markdown` | 是否按 Markdown 渲染 |
-| `--logs / --no-logs` | 是否显示 runtime 日志 |
-
----
-
-## 交互循环
-
-交互循环的真实行为不是“直接调用 agent”，而是通过消息总线工作：
-
-```text
-read_interactive_input_async()
-  ↓
-publish_inbound(InboundMessage)
-  ↓
-bus.consume_outbound()
-  ↓
-renderer 输出
+```bash
+nomi instance start
+nomi instance status
+nomi instance log
+nomi instance restart
+nomi instance stop
 ```
 
-关键逻辑：
+命名实例可以这样使用：
 
-- 启动提示与 signal handler：[nomi/cli/interactive.py](../nomi/cli/interactive.py#L37-L53)
-- 主循环：[nomi/cli/interactive.py](../nomi/cli/interactive.py#L54-L313)
-- outbound 消费：[nomi/cli/interactive.py](../nomi/cli/interactive.py#L132-L194)
+```bash
+nomi instance create xmy
+nomi instance start xmy
+nomi instance status xmy
+```
 
----
+同一个实例 root 只允许一个后台 runtime 进程。remote 和 channel 都挂在这个 runtime 上。
 
-## 快捷键与退出行为
+## 🌐 Remote 配置
 
-### `Esc`
+remote 给 desktop 使用。启用后，实例启动时会挂载 HTTP + SSE server。
 
-当前语义：
+```bash
+nomi remote enable --host 127.0.0.1 --port 8765
+nomi remote token
+nomi instance restart
+```
 
-- 只在“当前有活跃回复”时生效
-- 触发 `interrupt_session()`
-- 中断当前这轮回复，而不是退出整个进程
+remote 配置变更不会热加载。修改 host、port 或 token 后，需要重启实例。
 
-交互侧接线见 [nomi/cli/interactive.py](../nomi/cli/interactive.py#L232-L280)。
+## 💬 微信 Channel 配置
 
-### `Ctrl+C`
+当前唯一实际可用的 channel kind 是 `weixin`。
 
-当前语义：
+```bash
+nomi channel enable weixin
+nomi channel login
+nomi instance restart
+```
 
-- 退出整个交互进程
+channel enable 只改配置。微信是否真正运行，取决于实例 runtime 是否启动，以及微信登录态是否可用。
 
-对应逻辑：
+## 🤝 Instance 关系命令
 
-- signal handler：[nomi/cli/interactive.py](../nomi/cli/interactive.py#L37-L53)
-- 主循环兜底：[nomi/cli/interactive.py](../nomi/cli/interactive.py#L296-L303)
+CLI 也可以管理两个 Nomi 实例之间的关系：
 
-### 退出命令
+```bash
+nomi instance key
+nomi instance key 小美
+nomi instance invite-code
+nomi instance invite --from-code "nomi://instance-invite?..."
+nomi instance accept xmy --permission chat
+nomi instance reject xmy
+nomi instance remove-relation xmy
+nomi instance permission xmy task
+nomi instance send xmy "你现在方便吗？"
+```
 
-这些文本会退出交互：
+这些命令和 Agent 工具使用的是同一套 instance relation 存储。
 
-- `exit`
-- `quit`
-- `/exit`
-- `/quit`
-- `:q`
+## 🧱 使用边界
 
-见 [nomi/cli/interactive.py](../nomi/cli/interactive.py#L29-L35)。
+- `nomi remote start/stop` 不再是主流程。
+- `nomi channel start/stop` 不再是主流程。
+- 配置类命令通常需要 `nomi instance restart` 才会影响正在运行的实例。
+- `nomi agent` 是前台对话，不等于后台 service。
+- 自动任务只有在实例 runtime 运行时才会触发。
 
----
+## 🔎 相关代码
 
-## Slash 命令
-
-CLI 里的 slash 命令不是交给模型，而是在进入模型前就被路由掉。
-
-当前内置命令定义在 [nomi/command/handlers/builtin.py](../nomi/command/handlers/builtin.py#L17-L72)。
-
-命令列表：
-
-| 命令 | 说明 |
+| 代码 | 说明 |
 |---|---|
-| `/new` | 开始新会话 |
-| `/restart` | 原地重启进程 |
-| `/status` | 查看当前会话状态 |
-| `/dream` | 手动触发 Dream |
-| `/dream-log` | 查看 Dream 历史 |
-| `/dream-restore` | 回滚 Dream 版本 |
-| `/user-review` | 查看待确认画像候选 |
-| `/user-apply <id>` | 确认画像写入 `USER.md` |
-| `/user-reject <id>` | 拒绝画像候选 |
-| `/user-show` | 查看当前 `USER.md` |
-| `/skill list` | 查看全局 skills |
-| `/skill install <source>` | 安装 skill |
-| `/skill uninstall <name>` | 卸载 skill |
-| `/help` | 查看命令帮助 |
-
----
-
-## `nomi channel`
-
-`channel` 是当前唯一的外部 channel CLI 入口。
-
-子命令定义在 [nomi/cli/commands/channel.py](../nomi/cli/commands/channel.py#L24-L103)：
-
-| 命令 | 说明 |
-|---|---|
-| `nomi channel enable weixin` | 启用微信 adapter 配置 |
-| `nomi channel disable` | 禁用当前 channel adapter 配置 |
-| `nomi channel login` | 当前 active channel 登录 |
-| `nomi channel status` | 查看 channel adapter 状态 |
-
-`enable / disable / login / status` 现在都支持：
-
-- `--instance`
-- `--instance-root`
-- `--config`
-
-channel 不再负责启动进程。配置变化通过 `nomi instance restart` 应用。
-
-## `nomi remote`
-
-`remote` 是桌面壳 HTTP API + SSE adapter 的配置入口。
-
-当前子命令：
-
-- `nomi remote enable`
-- `nomi remote disable`
-- `nomi remote token`
-- `nomi remote rotate-token`
-- `nomi remote status`
-
-remote 不再负责启动进程。真正的监听由 `nomi instance start/restart` 挂载。
-
----
-
-## `nomi instance`
-
-`instance` 是真正的实例管理入口。
-
-当前子命令：
-
-- `nomi instance list`
-- `nomi instance create <name>`
-- `nomi instance inspect <name>`
-- `nomi instance remove <name>`
-- `nomi instance run [name]`
-- `nomi instance start [name]`
-- `nomi instance stop [name]`
-- `nomi instance restart [name]`
-- `nomi instance log [name]`
-- `nomi instance status [name]`
-- `nomi instance services`
-
-实现见 [nomi/cli/commands/instance.py](../nomi/cli/commands/instance.py#L1-L96)。
-
----
-
-## `nomi onboard`
-
-`onboard` 现在是实例初始化入口。
-
-当前行为：
-
-- 默认初始化 `default -> ~/.nomi`
-- 显式 `--instance` 或 `--instance-root` 时初始化对应实例
-- 配置不存在时创建实例级配置
-- 配置存在时允许覆盖或刷新
-- `--wizard` 时进入交互式向导
-- 最后同步该实例下 workspace 模板
-
-对应代码：[nomi/cli/commands/onboard.py](../nomi/cli/commands/onboard.py#L16-L125)
-
----
-
-## `nomi status`
-
-`status` 是一个独立的 CLI 命令，不是 slash 命令。
-
-它会读取：
-
-- 当前 instance
-- 当前 config
-- 当前 workspace
-- 当前默认 provider/model/timezone
-- 统一 runtime service 运行状态
-- remote adapter 状态
-- channel adapter 状态
-
-命令入口：[nomi/cli/commands/status.py](../nomi/cli/commands/status.py#L13-L37)  
-状态聚合：[nomi/cli/support/status.py](../nomi/cli/support/status.py#L29-L75)
-
----
-
-## CLI 和 runtime 的边界
-
-当前代码里这条边界很重要：
-
-- CLI 负责参数解析、交互循环、渲染
-- runtime 负责装配和生命周期
-
-也就是说：
-
-- `nomi/cli/commands/agent.py` 不自己 new provider
-- `nomi/runtime/app.py` 不负责 prompt_toolkit 交互
-
-这条边界是现在整套结构能维持清晰的前提之一。
+| [nomi/cli/app.py](../nomi/cli/app.py#L25-L87) | CLI 根命令注册 |
+| [nomi/cli/commands/agent.py](../nomi/cli/commands/agent.py#L33-L139) | `nomi agent` |
+| [nomi/cli/commands/instance.py](../nomi/cli/commands/instance.py#L37-L497) | `nomi instance` |
+| [nomi/cli/commands/remote.py](../nomi/cli/commands/remote.py#L15-L142) | `nomi remote` |
+| [nomi/cli/commands/channel.py](../nomi/cli/commands/channel.py#L21-L120) | `nomi channel` |
+| [nomi/cli/commands/onboard.py](../nomi/cli/commands/onboard.py#L18-L143) | `nomi onboard` |
+| [nomi/cli/commands/status.py](../nomi/cli/commands/status.py#L1-L42) | `nomi status` |

@@ -41,7 +41,7 @@ def build_help_text() -> str:
     返回:
         当前可用 slash 命令的展示文本。
     """
-    lines = ["🍌 nomi 命令："]
+    lines = ["🐶 nomi 命令："]
     lines.extend(f"{command} — {description}" for command, description in SLASH_COMMAND_SPECS)
     return "\n".join(lines)
 

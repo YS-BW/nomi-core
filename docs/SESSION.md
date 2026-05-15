@@ -1,39 +1,43 @@
 # 💬 Session
 
-Session 是 Nomi 当前“短期对话上下文”的持久化层 💬
+Session 是 Nomi 的对话历史。每个入口、每个聊天对象、每个 instance 关系都会形成自己的会话 key，并保存成 JSONL 文件。
 
-它不是长期记忆仓库，而更像“这条对话线程的聊天记录本” 📒
+它不是长期记忆，而是当前对话线程的短期上下文。
 
-它的作用主要是：
+## 🌟 Session 用来做什么
 
-- 保存当前会话的完整消息链
-- 在下一轮对话时恢复上下文
-- 配合 consolidator 做归档边界管理
-- 保存运行态 checkpoint
+Session 负责：
 
----
+- 保存用户消息和 assistant 回复。
+- 保存工具调用相关消息。
+- 为下一轮对话提供历史上下文。
+- 支持 desktop 侧读取会话列表和消息。
+- 支持 instance 会话查询。
+- 保存运行态 checkpoint 和中断恢复信息。
 
-## 代码位置
+## 🔑 会话 Key
 
-- session 模型和 manager：[nomi/session/manager.py](../nomi/session/manager.py#L15-L219)
-- runtime checkpoint 写回由 `TurnProcessor` 接入：[nomi/agent/execution/processor.py](../nomi/agent/execution/processor.py)
+常见会话 key：
 
----
+| 来源 | 示例 |
+|---|---|
+| CLI | `cli:direct` |
+| Remote / Desktop | `remote:<id>` |
+| 微信 | `weixin:<chat_id>` |
+| Instance | `instance:<relation_key>` |
+| 自动任务内部执行 | `task:<task_id>:run` |
 
-## 存储格式
+会话 key 决定消息写入哪个历史文件。
 
-当前 session 保存在：
+## 📄 存储格式
+
+Session 保存在：
 
 ```text
 <instance-root>/sessions/*.jsonl
 ```
 
-格式是 JSONL：
-
-1. 第一行 metadata
-2. 后面每行一条消息
-
-示意：
+文件格式是 JSONL：
 
 ```jsonl
 {"_type":"metadata","key":"cli:direct","created_at":"...","updated_at":"...","metadata":{},"last_consolidated":0}
@@ -41,134 +45,39 @@ Session 是 Nomi 当前“短期对话上下文”的持久化层 💬
 {"role":"assistant","content":"你好，我在。","timestamp":"..."}
 ```
 
-写回逻辑在 [nomi/session/manager.py](../nomi/session/manager.py#L174-L191)。
+第一行是 metadata，其余每行是一条消息。
 
----
+## 🧠 和长期记忆的关系
 
-## Session 模型
+Session 是短期对话历史。
+长期记忆在 workspace 的 `memory/` 和 `USER.md` 中。
 
-`Session` 当前包含：
+当会话变长时，consolidator / auto compact 会参与整理，避免每轮都把无限历史塞进模型。
 
-- `key`
-- `messages`
-- `created_at`
-- `updated_at`
-- `metadata`
-- `last_consolidated`
+## 🤝 Instance 会话
 
-定义见 [nomi/session/manager.py](../nomi/session/manager.py#L15-L24)。
+两个 Nomi 实例聊天时，本地会写入：
 
----
+```text
+instance:<key>
+```
 
-## 会话历史读取规则
+同一个 relation key 只对应一个 instance session。用户问“你刚才和哪个 Nomi 聊了什么”时，模型会使用 `instance_session_list` 和 `instance_session_get` 查询这里。
 
-`Session.get_history()` 不是简单把所有消息原样返回，它会做几层清洗：
+## 🧱 边界
 
-1. 只取未归档部分
-2. 如果超限，只保留最近消息
-3. 尽量从用户消息开始，避免截断在半个轮次中间
-4. 去掉开头不合法的孤儿 tool 结果
-5. 只保留适合送回模型的字段
+- Session 不是事实数据库，只是对话历史。
+- 删除 session 会丢掉这条对话线程的短期上下文。
+- `USER.md` 这类长期画像不会因为清 session 自动删除。
+- instance relation 删除后，历史 session 仍可能存在，但关系状态会显示 unknown。
 
-见 [nomi/session/manager.py](../nomi/session/manager.py#L37-L63)。
+## 🔎 相关代码
 
----
-
-## `last_consolidated`
-
-这个字段表示：
-
-- `messages` 里前多少条已经被归档到长期历史
-
-因此：
-
-- system prompt / 历史恢复时不会把那部分再重复塞进去
-- consolidator 能知道哪些内容已经沉淀
-
----
-
-## `/new` 时发生什么
-
-当用户执行 `/new`：
-
-1. 当前 session 的未归档消息会被截取出来
-2. session 清空
-3. metadata 也按需清掉
-4. 旧消息交给 consolidator 后台归档
-
-对应：
-
-- [nomi/agent/loop.py](../nomi/agent/loop.py#L244-L253)
-
----
-
-## 会话 key
-
-默认规则来自 `InboundMessage.session_key`：
-
-- [nomi/bus/events.py](../nomi/bus/events.py#L21-L25)
-
-常见形式：
-
-- `cli:direct`
-- `weixin:<chat_id>`
-
-如果是 unified session 模式，会被 `AgentLoop` 归一化成：
-
-- `unified:default`
-
----
-
-## 会话写回时的清洗
-
-不是所有发送给模型的内容都会原样落到 session 文件。
-
-例如：
-
-- runtime context block 不应该原样持久化
-- data URL 图片不应该直接持久化到 session
-- 超长 tool result 会被截断
-
-这些清洗逻辑在 [nomi/agent/execution/processor.py](../nomi/agent/execution/processor.py#L484-L560)。
-
----
-
-## Remote 会话管理
-
-当前 core 已经把 remote 的会话语义收口成 HTTP 显式管理：
-
-- `SessionManager.create_session()` 会立刻写入一份空 session 文件
-- `SessionManager.delete_session()` 会同时移除磁盘文件和内存缓存
-- `SessionManager.list_sessions()` 现在会返回 remote 可直接消费的摘要字段：
-  - `session_id`
-  - `title`
-  - `created_at_ms`
-  - `updated_at_ms`
-  - `message_count`
-  - `archived`
-  - `source`
-- remote facade 在读取历史、取状态、发送消息、中断前会先检查 session 是否存在；不存在就直接报 `session_not_found`，不会再隐式创建空会话
-- 旧 `bind_session` / `send_message` command 面已经移除；创建会话走 `POST /v1/sessions`，发送消息走 `POST /v1/sessions/{session_id}/turns`
-
-相关代码：
-
-- Session manager：[nomi/session/manager.py](../nomi/session/manager.py#L109-L331)
-- Remote facade：[nomi/runtime/app.py](../nomi/runtime/app.py#L305-L439)
-
----
-
-## 当前边界
-
-session 层当前只管：
-
-- 会话结构
-- JSONL 持久化
-- 缓存与加载
-
-它不负责：
-
-- 长期记忆整理
-- 画像候选抽取
-- channel 协议
-
-这层越薄，越容易稳定。
+| 代码 | 说明 |
+|---|---|
+| [nomi/session/manager.py](../nomi/session/manager.py#L18-L111) | Session 数据模型 |
+| [nomi/session/manager.py](../nomi/session/manager.py#L112-L240) | SessionManager 读取、创建、删除 |
+| [nomi/session/manager.py](../nomi/session/manager.py#L241-L381) | JSONL 落盘、列表和订阅 |
+| [nomi/agent/execution/processor.py](../nomi/agent/execution/processor.py#L339-L530) | 单轮消息写入 session |
+| [nomi/runtime/app.py](../nomi/runtime/app.py#L1953-L1971) | remote sidebar/session 序列化 |
+| [nomi/agent/tools/instance_relations.py](../nomi/agent/tools/instance_relations.py#L314-L408) | instance session 查询工具 |

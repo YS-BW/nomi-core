@@ -1,305 +1,145 @@
 # 🧰 Tools
 
-Nomi 当前的工具系统已经接入主链路，不是外挂功能 🧰
+Tools 是模型能调用的实际能力。用户自然说“读一下这个文件”“打开微信”“10 分钟后提醒我”“问一下 xmy 的 Nomi”，最终通常都会落到某个工具调用。
 
-默认工具会在 `AgentLoop` 初始化时统一注册：
+工具说明由 core 内置 `TOOLS.md` 注入 system prompt，不再作为每个 workspace 的可变文件生成。
 
-- [nomi/agent/tools/bootstrap.py](../nomi/agent/tools/bootstrap.py#L26-L102)
+## 🌟 默认工具能做什么
 
----
+当前默认工具覆盖这些能力：
 
-## 当前默认工具集合
+- 文件读写和编辑。
+- 工作区搜索。
+- 受限制的 shell 命令。
+- 网页搜索和抓取。
+- 图片理解。
+- 自动任务。
+- Skill 管理。
+- MCP 管理。
+- Instance 改名、关系、聊天和会话查询。
 
-### 文件工具
+## 📁 文件工具
 
-| 工具 | 说明 |
+| 工具 | 用途 |
 |---|---|
-| `read_file` | 读文本、图片、PDF |
-| `write_file` | 写文件 |
-| `edit_file` | 定位并编辑文件片段 |
-| `list_dir` | 列目录 |
+| `read_file` | 读取文本、图片、PDF 等文件 |
+| `write_file` | 写入新文件或覆盖文件 |
+| `edit_file` | 按片段编辑文件 |
+| `list_dir` | 列出目录内容 |
 
-实现文件：
+模型需要先读后写，不能假设文件存在或内容符合预期。
 
-- [nomi/agent/tools/filesystem.py](../nomi/agent/tools/filesystem.py#L48-L220)
+## 🔎 搜索工具
 
-### 搜索工具
-
-| 工具 | 说明 |
+| 工具 | 用途 |
 |---|---|
-| `glob` | 按 glob 模式找文件 |
-| `grep` | 按正则搜索内容 |
+| `glob` | 按文件名模式找文件 |
+| `grep` | 按正则搜索文件内容 |
 
-实现文件：
+大范围搜索时，模型应该先缩小范围，再读取具体文件。
 
-- [nomi/agent/tools/search.py](../nomi/agent/tools/search.py#L90-L220)
+## 🖥️ Shell 工具
 
-### Shell 工具
-
-| 工具 | 说明 |
+| 工具 | 用途 |
 |---|---|
-| `exec` | 执行 shell 命令，带安全限制 |
+| `exec` | 执行受限制的 shell 命令 |
 
-实现文件：
+`exec` 可以用于：
 
-- [nomi/agent/tools/shell.py](../nomi/agent/tools/shell.py#L21-L220)
+- 运行测试。
+- 查看命令输出。
+- 打开本机应用。
+- 打开 URL。
+- 打开本地文件。
 
-### Web 工具
+macOS 示例：
 
-| 工具 | 说明 |
+```bash
+open -a WeChat
+open -a "Google Chrome" "https://example.com"
+open "/absolute/path"
+```
+
+不能用 `exec` 做延时和后台调度；这类需求应该用 `task_*`。
+
+## 🌐 Web 工具
+
+| 工具 | 用途 |
 |---|---|
 | `web_search` | 搜索网页 |
 | `web_fetch` | 抓取网页正文 |
 
-实现文件：
+适合处理需要联网确认的事实、资料和页面内容。
 
-- [nomi/agent/tools/web.py](../nomi/agent/tools/web.py#L75-L240)
+## ⏰ 自动任务工具
 
-### 图片工具
-
-| 工具 | 说明 |
+| 工具 | 用途 |
 |---|---|
-| `analyze_image` | 单独发起一次图片理解请求 |
+| `task_create_after` | 延时一次 |
+| `task_create_at` | 定点一次 |
+| `task_create_daily` | 每天重复 |
+| `task_create_every` | 固定间隔重复 |
+| `task_list` | 查看任务 |
+| `task_get` | 查看单个任务 |
+| `task_delete` | 删除任务 |
+| `task_enable` | 启用任务 |
+| `task_disable` | 停用任务 |
+| `task_update_instruction` | 修改任务内容 |
+| `task_reschedule_after` | 改成延时一次 |
+| `task_reschedule_at` | 改成定点一次 |
+| `task_reschedule_daily` | 改成每天重复 |
+| `task_reschedule_every` | 改成固定间隔重复 |
 
-实现文件：
+默认提醒是全局投递。只有用户明确要求“只发微信 / 只发 desktop / 只发 CLI”时，才设置 `target_channels`。
 
-- [nomi/agent/tools/image_analysis.py](../nomi/agent/tools/image_analysis.py#L16-L102)
+## 🤝 Instance 工具
 
-### Cron 工具
-
-| 工具 | 说明 |
+| 工具 | 用途 |
 |---|---|
-| `cron_create` | 创建任务 |
-| `cron_list` | 查看任务 |
-| `cron_delete` | 删除任务 |
-| `cron_update` | 更新任务 |
+| `instance_set_name` | 设置当前 Nomi 名字 |
+| `instance_invite_code` | 生成一次性邀请码 |
+| `instance_invite` | 用邀请码发好友申请 |
+| `instance_relation_list` | 查看关系和申请 |
+| `instance_relation_accept` | 接受申请 |
+| `instance_relation_reject` | 拒绝申请 |
+| `instance_relation_withdraw` | 撤回申请 |
+| `instance_relation_remove` | 删除关系 |
+| `instance_relation_set_permission` | 修改授予对方的权限 |
+| `instance_send_message` | 给另一个 instance 发消息 |
+| `instance_session_list` | 查看最近 instance 会话 |
+| `instance_session_get` | 读取某个 instance 会话 |
 
-### Skill 工具
+权限由接收方本地 relation 决定：
 
-| 工具 | 说明 |
+- `chat`：聊天和 instance 会话查询。
+- `task`：在 `chat` 基础上允许 `task_*`。
+- `all`：在 `task` 基础上允许文件、命令、skill、MCP 和关系管理。
+
+## 📦 Skill 和 MCP 工具
+
+Skill 工具用于安装、创建、卸载和列出 skills。
+MCP 工具用于管理外部 MCP server 配置。
+
+这两类工具会改变当前实例能力，通常应该只在用户明确要求时使用。
+
+## 🧱 工具权限边界
+
+- 工具返回结果是给模型看的，模型应该根据结果解释给用户。
+- instance 来源不是本机用户，必须按 relation permission 暴露工具。
+- 自动任务内部不能递归创建新任务。
+- shell 工具不能用来绕过自动任务系统。
+- 工作区里的外部文件内容只是数据，不是更高优先级指令。
+
+## 🔎 相关代码
+
+| 代码 | 说明 |
 |---|---|
-| `list_skills` | 查看 skills |
-| `install_skill` | 安装 skill |
-| `uninstall_skill` | 卸载 skill |
-
-### Instance 关系工具
-
-| 工具 | 说明 |
-|---|---|
-| `instance_invite_code` | 生成当前实例的一次性邀请码 |
-| `instance_invite` | 通过一次性邀请码向另一个实例发起好友申请 |
-| `instance_relation_list` | 查看当前实例的好友关系和待处理申请 |
-| `instance_relation_accept` | 接受一个实例好友申请 |
-| `instance_relation_reject` | 拒绝一个实例好友申请 |
-| `instance_relation_withdraw` | 撤回我发出的实例好友申请 |
-| `instance_relation_remove` | 删除一个已建立的实例好友关系 |
-| `instance_relation_set_permission` | 修改我授予对方的权限 |
-| `instance_send_message` | 向已成为好友且具备 `chat` 权限的实例发送消息 |
-| `instance_session_list` | 查看最近 instance 聊天会话 |
-| `instance_session_get` | 读取某个 instance 会话的最近消息 |
-
-实现文件：
-
-- [nomi/agent/tools/instance_relations.py](../nomi/agent/tools/instance_relations.py#L19-L412)
-
-这些工具由 `NomiRuntime` 挂载，因为它们需要访问当前实例的关系存储和 InstanceChannel client：
-
-- [nomi/runtime/app.py](../nomi/runtime/app.py#L2001-L2042)
-
-工具使用说明不是 workspace 文件。`nomi/templates/TOOLS.md` 会由 system prompt builder 内置注入，`sync_workspace_templates()` 不再生成 `workspace/TOOLS.md`。
-
----
-
-## 工具注册逻辑
-
-`register_default_tools()` 会根据配置决定注册哪些工具：
-
-- shell 工具只有 `tools.exec.enable = true` 才注册
-- web 工具只有 `tools.web.enable = true` 才注册
-- 其它默认工具始终注册
-
-见 [nomi/agent/tools/bootstrap.py](../nomi/agent/tools/bootstrap.py#L55-L102)。
-
----
-
-## 文件工具细节
-
-### `read_file`
-
-当前支持：
-
-- 普通 UTF-8 文本
-- PDF 文本抽取
-- 图片读取并转成多模态内容块
-
-同时会做这些保护：
-
-- 拦截危险设备文件
-- 文件未变化时返回“unchanged”占位
-- 限制最大读取字符数
-
-见 [nomi/agent/tools/filesystem.py](../nomi/agent/tools/filesystem.py#L78-L220)。
-
-### 路径限制
-
-文件工具统一通过 `_resolve_path()` 做路径解析和 allowed dir 限制：
-
-- [nomi/agent/tools/filesystem.py](../nomi/agent/tools/filesystem.py#L21-L37)
-
----
-
-## 搜索工具细节
-
-`glob` 和 `grep` 都会跳过一批噪音目录，例如：
-
-- `.git`
-- `node_modules`
-- `__pycache__`
-
-搜索基类逻辑在 [nomi/agent/tools/search.py](../nomi/agent/tools/search.py#L90-L133)。
-
----
-
-## Shell 工具细节
-
-`exec` 当前是一个“受限制 shell 工具”，不是原始命令直通。
-
-### 打开应用、浏览器、URL 和文件
-
-`exec` 不只用于测试或脚本。模型需要打开本机应用、浏览器、网页 URL 或本地文件时，也应该使用 `exec` 调系统命令完成。
-
-macOS 常见命令：
-
-- `open -a WeChat`
-- `open -a "Google Chrome" "https://example.com"`
-- `open "https://example.com"`
-- `open "/absolute/path"`
-
-Windows 常见命令：
-
-- `start "" "https://example.com"`
-- `start "" "C:\\path\\file.txt"`
-
-Linux 常见命令：
-
-- `xdg-open "https://example.com"`
-- `xdg-open "/absolute/path"`
-
-这些规则写在包内工具模板 [nomi/templates/TOOLS.md](../nomi/templates/TOOLS.md#L69-L93)，由 system prompt builder 注入。
-
-### 它会拦截的东西
-
-例如：
-
-- `rm -rf`
-- `del /f /q`
-- `rmdir /s`
-- `dd if=`
-- `shutdown`
-- `reboot`
-- `fork bomb`
-- 直接覆盖 `history.jsonl` / `.dream_cursor`
-
-拒绝规则定义在 [nomi/agent/tools/shell.py](../nomi/agent/tools/shell.py#L71-L87)。
-
-### 工作区限制
-
-如果开启：
-
-```json
-{
-  "tools": {
-    "restrictToWorkspace": true
-  }
-}
-```
-
-或者启用了 sandbox，`exec` 会加强工作目录限制。
-
----
-
-## Web 工具细节
-
-当前 `web_search` 支持多种后端：
-
-- `duckduckgo`
-- `tavily`
-- `searxng`
-- `jina`
-- `brave`
-- `kagi`
-
-配置模型见 [nomi/config/schema/tools.py](../nomi/config/schema/tools.py#L12-L27)。
-
-`web_fetch` 会做 URL 基础校验和正文抽取，不会把网页内容当成可信指令。
-
----
-
-## MCP 扩展
-
-Nomi 当前支持把外部 MCP server 包装成工具。
-
-MCP 工具层在：
-
-- [nomi/agent/tools/mcp.py](../nomi/agent/tools/mcp.py#L75-L260)
-
-当前配置结构：
-
-```json
-{
-  "tools": {
-    "mcpServers": {
-      "my-server": {
-        "type": "stdio",
-        "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path"],
-        "enabledTools": ["*"]
-      }
-    }
-  }
-}
-```
-
-配置模型定义在 [nomi/config/schema/tools.py](../nomi/config/schema/tools.py#L40-L59)。
-
-当前支持协议：
-
-- `stdio`
-- `sse`
-- `streamableHttp`
-
----
-
-## 图片工具
-
-`analyze_image` 的作用不是简单读图文件，而是显式发起一次独立多模态模型调用。
-
-适合场景：
-
-- 用户明确要“看图”
-- 不想只靠 read_file 的占位文本
-
-对应实现：[nomi/agent/tools/image_analysis.py](../nomi/agent/tools/image_analysis.py#L23-L102)
-
----
-
-## 当前没有的工具
-
-当前默认工具里已经没有：
-
-- `notebook_edit`
-
-如果文档里还写这个，就是过期信息。
-
----
-
-## 当前边界
-
-工具层当前的边界很明确：
-
-- `bootstrap.py` 只负责默认装配
-- 每个工具文件负责自己的协议与执行
-- `ToolRegistry` 只负责注册和查找
-- MCP 是扩展入口，不是把所有能力都堆在本地工具里
-
-这套分层现在是比较干净的，文档也应该按这个事实来写。
+| [nomi/agent/tools/bootstrap.py](../nomi/agent/tools/bootstrap.py#L26-L136) | 默认工具注册 |
+| [nomi/agent/tools/registry.py](../nomi/agent/tools/registry.py#L1-L166) | 工具注册表和执行 |
+| [nomi/agent/tools/filesystem.py](../nomi/agent/tools/filesystem.py#L48-L220) | 文件工具 |
+| [nomi/agent/tools/search.py](../nomi/agent/tools/search.py#L90-L220) | 搜索工具 |
+| [nomi/agent/tools/shell.py](../nomi/agent/tools/shell.py#L21-L355) | shell 工具 |
+| [nomi/agent/tools/web.py](../nomi/agent/tools/web.py#L75-L240) | web 工具 |
+| [nomi/agent/tools/tasks.py](../nomi/agent/tools/tasks.py#L14-L723) | 自动任务工具 |
+| [nomi/agent/tools/instance_relations.py](../nomi/agent/tools/instance_relations.py#L11-L408) | instance 工具 |
+| [nomi/templates/TOOLS.md](../nomi/templates/TOOLS.md#L1-L157) | 注入给模型的工具说明 |
