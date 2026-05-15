@@ -337,7 +337,6 @@ def build_provider_state(config) -> dict[str, Any]:
         api_base = _normalize_optional_text(provider_config.api_base)
         effective_api_base = api_base or (spec.default_api_base or None)
         saved_model = _normalize_optional_text(getattr(provider_config, "model", None))
-        token_plan_api_key = str(getattr(provider_config, "token_plan_api_key", "") or "").strip()
         providers.append(
             {
                 "provider": spec.name,
@@ -347,15 +346,7 @@ def build_provider_state(config) -> dict[str, Any]:
                 "editable": True,
                 "deletable": False,
                 "api_key_set": bool(api_key),
-                "api_key": api_key,
                 "api_key_preview": _build_api_key_preview(api_key),
-                "token_plan_api_key_set": bool(token_plan_api_key)
-                if spec.name == "mimo"
-                else None,
-                "token_plan_api_key": token_plan_api_key if spec.name == "mimo" else None,
-                "token_plan_api_key_preview": _build_api_key_preview(token_plan_api_key)
-                if spec.name == "mimo"
-                else None,
                 "saved_model": saved_model,
                 "api_base": effective_api_base,
                 "api_base_editable": spec.name == "custom",

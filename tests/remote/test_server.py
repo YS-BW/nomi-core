@@ -88,11 +88,7 @@ class _FakeRuntime:
                     "editable": True,
                     "deletable": False,
                     "api_key_set": True,
-                    "api_key": "sk-test-1234",
                     "api_key_preview": "…1234",
-                    "token_plan_api_key_set": None,
-                    "token_plan_api_key": None,
-                    "token_plan_api_key_preview": None,
                     "saved_model": "deepseek-chat",
                     "api_base": "https://api.deepseek.com",
                     "api_base_editable": False,
@@ -485,7 +481,6 @@ class _FakeRuntime:
             "clear_token_plan_api_key": clear_token_plan_api_key,
         }
         self.provider_updates.append(update)
-        token_plan_key_set = token_plan_api_key not in (Ellipsis, None, "")
         settings = {
             "provider": provider_name,
             "display_name": "Custom" if provider_name == "custom" else "DeepSeek",
@@ -494,13 +489,9 @@ class _FakeRuntime:
             "editable": True,
             "deletable": False,
             "api_key_set": False if clear_api_key is True else api_key not in (Ellipsis, None, ""),
-            "api_key": "" if clear_api_key is True or api_key in (Ellipsis, None) else api_key,
             "api_key_preview": None
             if clear_api_key is True or api_key in (Ellipsis, None, "")
             else "…9999",
-            "token_plan_api_key_set": token_plan_key_set if provider_name == "mimo" else None,
-            "token_plan_api_key": token_plan_api_key if token_plan_key_set else None,
-            "token_plan_api_key_preview": "…plan" if token_plan_key_set else None,
             "saved_model": None if model in (Ellipsis, None, "") else model,
             "api_base": None if api_base in (Ellipsis, None, "") else api_base,
             "api_base_editable": provider_name == "custom",
@@ -887,15 +878,6 @@ async def test_remote_http_provider_tasks_resources_and_errors() -> None:
             assert updated.status_code == 200
             assert updated.json()["settings"]["saved_model"] == "gpt-test"
             assert runtime.provider_updates[0]["provider"] == "custom"
-
-            mimo_updated = await client.patch(
-                "http://127.0.0.1:8887/v1/providers/mimo",
-                headers=_auth(),
-                json={"token_plan_api_key": "tp-plan"},
-            )
-            assert mimo_updated.status_code == 200
-            assert mimo_updated.json()["settings"]["token_plan_api_key"] == "tp-plan"
-            assert runtime.provider_updates[1]["token_plan_api_key"] == "tp-plan"
 
             active = await client.put(
                 "http://127.0.0.1:8887/v1/providers/active",

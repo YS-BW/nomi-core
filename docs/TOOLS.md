@@ -164,6 +164,29 @@ Nomi 当前的工具系统已经接入主链路，不是外挂功能 🧰
 
 `exec` 当前是一个“受限制 shell 工具”，不是原始命令直通。
 
+### 打开应用、浏览器、URL 和文件
+
+`exec` 不只用于测试或脚本。模型需要打开本机应用、浏览器、网页 URL 或本地文件时，也应该使用 `exec` 调系统命令完成。
+
+macOS 常见命令：
+
+- `open -a WeChat`
+- `open -a "Google Chrome" "https://example.com"`
+- `open "https://example.com"`
+- `open "/absolute/path"`
+
+Windows 常见命令：
+
+- `start "" "https://example.com"`
+- `start "" "C:\\path\\file.txt"`
+
+Linux 常见命令：
+
+- `xdg-open "https://example.com"`
+- `xdg-open "/absolute/path"`
+
+这些规则写在包内工具模板 [nomi/templates/TOOLS.md](../nomi/templates/TOOLS.md#L69-L93)，由 system prompt builder 注入。
+
 ### 它会拦截的东西
 
 例如：

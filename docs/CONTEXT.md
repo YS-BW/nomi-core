@@ -62,6 +62,8 @@ skills 摘要
 
 见 [nomi/agent/context/system_prompt.py](../nomi/agent/context/system_prompt.py#L52-L91)。
 
+`IDENTITY.md` 只描述身份、运行环境和入口上下文，不承载具体工具使用策略。
+
 #### 2. Bootstrap files
 
 当前默认加载这些工作区文件：
@@ -72,7 +74,7 @@ skills 摘要
 
 定义在 [nomi/agent/context/system_prompt.py](../nomi/agent/context/system_prompt.py#L16-L16)。
 
-`TOOLS.md` 由 [nomi/templates/TOOLS.md](../nomi/templates/TOOLS.md#L1-L102) 作为包内模板注入，不再从 workspace 读取。
+`TOOLS.md` 由 [nomi/templates/TOOLS.md](../nomi/templates/TOOLS.md#L1-L157) 作为包内模板注入，不再从 workspace 读取。工具选择、执行规则、不同 channel 下的工具使用方法、自动任务、instance 工具和工作区纪律都集中放在这里，避免每个实例的 workspace 复制一份后漂移。
 
 #### 3. 长期记忆
 

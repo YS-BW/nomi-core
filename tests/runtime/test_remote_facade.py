@@ -303,7 +303,7 @@ async def test_runtime_receive_instance_message_uses_instance_identity(tmp_path:
             "_instance_direction": "inbound",
             "_instance_peer_key": "xmy",
         },
-        allowed_tool_names=runtime.instance_allowed_tool_names("chat"),
+        allowed_tool_names=runtime.instance_inbound_allowed_tool_names("chat"),
     )
     session = runtime.agent_loop.sessions.get("instance:xmy")
     assert session is not None
@@ -1011,14 +1011,14 @@ def test_runtime_update_provider_can_update_mimo_token_plan_key(
 
     result = runtime.update_provider("mimo", token_plan_api_key="tp-test")
     saved = Config.model_validate_json(config_path.read_text(encoding="utf-8"))
-    assert result["settings"]["token_plan_api_key"] == "tp-test"
-    assert result["settings"]["token_plan_api_key_set"] is True
+    assert result["settings"]["api_key_set"] is False
+    assert result["settings"]["api_key_preview"] is None
     assert result["requires_runtime_reload"] is True
     assert saved.providers.mimo.token_plan_api_key == "tp-test"
 
     cleared = runtime.update_provider("mimo", clear_token_plan_api_key=True)
     saved = Config.model_validate_json(config_path.read_text(encoding="utf-8"))
-    assert cleared["settings"]["token_plan_api_key_set"] is False
+    assert cleared["settings"]["api_key_set"] is False
     assert saved.providers.mimo.token_plan_api_key == ""
 
 

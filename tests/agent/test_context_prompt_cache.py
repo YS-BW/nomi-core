@@ -191,14 +191,29 @@ def test_partial_dream_processing_shows_only_remainder(tmp_path) -> None:
 
 
 def test_execution_rules_in_system_prompt(tmp_path) -> None:
-    """New execution rules should appear in the system prompt."""
+    """执行规则应通过内置 TOOLS.md 注入 system prompt。"""
     workspace = _make_workspace(tmp_path)
     builder = _make_builder(workspace)
 
     prompt = builder.build_system_prompt()
-    assert "能做就直接做" in prompt
+    assert "## TOOLS.md" in prompt
+    assert "## 1. 基本执行规则" in prompt
+    assert "能用工具完成就直接做" in prompt
     assert "先读后写" in prompt
     assert "一定要验证结果" in prompt
+
+
+def test_identity_template_does_not_embed_tool_rules() -> None:
+    """IDENTITY.md 只描述身份和环境，不再承载工具使用策略。"""
+    identity = (pkg_files("nomi") / "templates" / "IDENTITY.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "## 1. 基本执行规则" not in identity
+    assert "## 10. `task_*`" not in identity
+    assert "## 12. 工作区纪律" not in identity
+    assert "task_create_after" not in identity
+    assert "open -a WeChat" not in identity
 
 
 def test_system_prompt_injects_skill_metadata_only(tmp_path, monkeypatch) -> None:
@@ -257,8 +272,8 @@ def test_system_prompt_contains_cron_rules(tmp_path) -> None:
     builder = _make_builder(workspace)
 
     prompt = builder.build_system_prompt()
-    assert "## 执行规则" in prompt
-    assert "## 工作区纪律" in prompt
+    assert "## 10. `task_*`" in prompt
+    assert "## 12. 工作区纪律" in prompt
     assert "task_create_after" in prompt
     assert "task_create_at" in prompt
     assert "task_create_daily" in prompt
@@ -270,11 +285,37 @@ def test_system_prompt_contains_cron_rules(tmp_path) -> None:
     assert "task_disable" in prompt
     assert "task_update_instruction" in prompt
     assert "task_reschedule_after" in prompt
-    assert "定时任务的结果是实例级全局提醒" in prompt
-    assert "默认情况下，定时任务执行完成后应通过全局提醒通知用户" in prompt
+    assert "定时任务结果采用实例级全局提醒" in prompt
+    assert "如果用户说“提醒我”，默认就是全局提醒" in prompt
     assert "省略 `target_channels` 表示全局提醒" in prompt
     assert "只有用户明确要求" in prompt
     assert "可选值是 `weixin`、`cli`、`remote`" in prompt
+
+
+def test_system_prompt_contains_exec_open_rules(tmp_path) -> None:
+    """打开应用、浏览器、URL 应由 TOOLS.md 明确教给模型。"""
+    workspace = _make_workspace(tmp_path)
+    builder = _make_builder(workspace)
+
+    prompt = builder.build_system_prompt()
+    assert "## 8. `exec`" in prompt
+    assert "打开本机应用、浏览器、URL、本地文件也属于它的职责" in prompt
+    assert "不要回复“我不能直接操作客户端”" in prompt
+    assert "open -a WeChat" in prompt
+    assert 'open -a "Google Chrome" "https://example.com"' in prompt
+    assert 'open "/absolute/path"' in prompt
+
+
+def test_system_prompt_contains_channel_tool_usage_rules(tmp_path) -> None:
+    """不同入口的工具使用策略应集中在内置 TOOLS.md。"""
+    workspace = _make_workspace(tmp_path)
+    builder = _make_builder(workspace)
+
+    prompt = builder.build_system_prompt(channel="weixin")
+    assert "## 3. 不同入口的工具使用" in prompt
+    assert "desktop / remote" in prompt
+    assert "微信只是当前对话入口，不等于只能做微信相关能力" in prompt
+    assert "instance：对方 instance 的可用工具由本机授予它的权限决定" in prompt
 
 
 def test_context_builder_injects_attachment_block_for_non_image_files(tmp_path) -> None:
