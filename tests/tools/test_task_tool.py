@@ -544,6 +544,61 @@ async def test_loop_poll_global_reminders_routes_to_channel_latest_session(tmp_p
     assert messages[0].channel == "weixin"
     assert messages[0].chat_id == "wx-user"
     assert messages[0].metadata["_task_delivery_id"] == "task_1"
+    session = loop.sessions.get("weixin:wx-user")
+    assert session is not None
+    assert session.messages[-1]["role"] == "assistant"
+    assert session.messages[-1]["content"] == "全局提醒"
+    assert session.messages[-1]["metadata"]["direction"] == "global_reminder"
+    assert session.messages[-1]["metadata"]["task_id"] == "task_1"
+
+
+@pytest.mark.asyncio
+async def test_loop_poll_global_reminders_routes_remote_to_latest_session(tmp_path) -> None:
+    """remote 全局提醒也必须落入 desktop/remote 会话，供 desktop 实时展示。"""
+    tools = _make_tools(tmp_path)
+    runner = tools["runner"]
+    runner._reminders = runner._reminders.__class__(tmp_path / "tasks-runtime" / "reminders.json")
+    loop = runner._loop
+    loop.reminder_consumer = "remote"
+    loop.reminder_consumers = {"remote"}
+    loop.bus = MessageBus()
+    loop.tasks = runner
+    loop.sessions = SessionManager(tmp_path / "session-workspace")
+    loop.sessions.create_session(
+        "desktop:client:chat",
+        source="remote",
+    )
+    runner._reminders.enqueue(
+        task_id="instance_relation_request:xmy",
+        session_id="instance:notifications",
+        content="好友申请",
+        targets=["remote"],
+    )
+
+    messages: list[OutboundMessage] = []
+    original_publish = loop.bus.publish_outbound
+
+    async def _capture(message: OutboundMessage) -> None:
+        messages.append(message)
+
+    loop.bus.publish_outbound = _capture
+    try:
+        from nomi.agent.loop import AgentLoop
+
+        published = await AgentLoop.poll_global_reminders(loop)
+    finally:
+        loop.bus.publish_outbound = original_publish
+
+    assert published is True
+    assert len(messages) == 1
+    assert messages[0].channel == "remote"
+    assert messages[0].metadata["_session_id"] == "desktop:client:chat"
+    session = loop.sessions.get("desktop:client:chat")
+    assert session is not None
+    assert session.messages[-1]["role"] == "assistant"
+    assert session.messages[-1]["content"] == "好友申请"
+    assert session.messages[-1]["metadata"]["direction"] == "global_reminder"
+    assert session.messages[-1]["metadata"]["task_id"] == "instance_relation_request:xmy"
 
 
 async def test_run_agent_task_keeps_prepare_stage_out_of_main_session(tmp_path) -> None:

@@ -171,7 +171,6 @@ class InstanceRelationManager:
         request = self._require_request(key, direction="outgoing")
         relation = InstanceRelation(
             key=request.key,
-            name="",
             url=str(url or request.url).strip().rstrip("/"),
             relation_id=str(relation_id or "").strip(),
             relation_token=str(relation_token or "").strip(),
@@ -189,12 +188,23 @@ class InstanceRelationManager:
         """申请方处理 rejected 回调并删除 pending 记录。"""
         return self.requests.delete(key)
 
+    def withdraw_outgoing(self, key: str) -> InstanceRelationRequest:
+        """撤回一条 outgoing 申请并返回删除前快照。"""
+        request = self._require_request(key, direction="outgoing")
+        self.requests.delete(request.key)
+        return request
+
+    def apply_remote_withdraw(self, key: str) -> InstanceRelationRequest:
+        """处理对方发来的撤回申请通知。"""
+        request = self._require_request(key, direction="incoming")
+        self.requests.delete(request.key)
+        return request
+
     def create_relation(self, *, key: str, url: str, permission: str) -> InstanceRelation:
         """创建一条本地已接受关系。"""
         now = _now_ms()
         relation = InstanceRelation(
             key=normalize_key(key),
-            name="",
             url=str(url or "").strip().rstrip("/"),
             relation_id=f"rel_{secrets.token_urlsafe(16)}",
             relation_token=secrets.token_urlsafe(32),
@@ -215,13 +225,6 @@ class InstanceRelationManager:
     def apply_remote_remove(self, relation: InstanceRelation) -> None:
         """处理对方发来的删除关系通知。"""
         self.relations.delete(relation.key)
-
-    def rename(self, key: str, name: str) -> InstanceRelation:
-        """更新关系备注名。"""
-        relation = self._require_relation(key)
-        relation.name = str(name or "").strip()
-        relation.updated_at_ms = _now_ms()
-        return self.relations.put(relation)
 
     def set_permission(self, key: str, permission: str) -> InstanceRelation:
         """更新本地授予对方的权限。"""
@@ -285,19 +288,16 @@ class InstanceRelationManager:
             return
         self.notification.enqueue_global(
             notification_id=f"instance_relation_request:{key}",
-            content=(
-                f"{key} 发来好友申请，请求 {requested_permission} 权限。"
-                "可以回复：同意 / 拒绝 / 信任"
-            ),
+            content=f"{key} 发来 instance 好友申请，请求 {requested_permission} 权限。",
         )
 
     async def notify_relation_accepted(self, key: str) -> None:
-        """通知用户关系已通过并提示备注。"""
+        """通知用户关系已通过。"""
         if self.notification is None:
             return
         self.notification.enqueue_global(
             notification_id=f"instance_relation_accepted:{key}",
-            content=f"已添加 {key}。请给这个 instance 取一个备注名，例如：备注 {key} 为 小美",
+            content=f"已添加 {key}。",
         )
 
     async def notify_relation_removed(self, key: str) -> None:
@@ -307,6 +307,15 @@ class InstanceRelationManager:
         self.notification.enqueue_global(
             notification_id=f"instance_relation_removed:{key}",
             content=f"{key} 已解除与你的 instance 好友关系。",
+        )
+
+    async def notify_relation_withdrawn(self, key: str) -> None:
+        """通知用户对方已撤回好友申请。"""
+        if self.notification is None:
+            return
+        self.notification.enqueue_global(
+            notification_id=f"instance_relation_withdrawn:{key}",
+            content=f"{key} 已撤回 instance 好友申请。",
         )
 
     @staticmethod
@@ -329,7 +338,6 @@ class InstanceRelationManager:
         if relation is None:
             raise ValueError(f"instance relation not found: {key}")
         return relation
-
 
 def _hash_secret(secret: str) -> str:
     """返回邀请码 secret 的哈希。"""

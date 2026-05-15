@@ -98,12 +98,12 @@
 - `nomi instance relations`
 - `nomi instance accept <key>`
 - `nomi instance reject <key>`
-- `nomi instance rename <key> <name>`
+- `nomi instance withdraw <key>`
 - `nomi instance remove-relation <key>`
 - `nomi instance permission <key> <chat|task|all>`
 - `nomi instance send <key> <message>`
 
-命令定义在 [nomi/cli/commands/instance.py](../nomi/cli/commands/instance.py#L1-L384)。
+命令定义在 [nomi/cli/commands/instance.py](../nomi/cli/commands/instance.py#L1-L514)。
 
 其中：
 
@@ -111,7 +111,7 @@
 - `create` 会注册实例并创建标准目录
 - `start/stop/restart/log/status` 是唯一后台 runtime 管理入口
 - `services` 会汇总所有实例的 runtime 与 adapter 状态
-- `key/invite-code/invite/relations/accept/reject/rename/remove-relation/permission/send` 管理实例之间的关系与基础聊天
+- `key/invite-code/invite/relations/accept/reject/withdraw/remove-relation/permission/send` 管理实例之间的关系与基础聊天
 
 实例间关系和聊天通道见 [INSTANCE_CHANNEL.md](./INSTANCE_CHANNEL.md)。
 

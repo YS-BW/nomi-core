@@ -86,6 +86,9 @@ def test_transcription_defaults() -> None:
 
 def test_instance_key_accepts_chinese_and_rejects_path_separators() -> None:
     """instance.key 允许中文，但不允许作为 session/path 分隔符的字符。"""
+    assert Config().instance.key == "nomi"
+    assert Config.model_validate({"instance": {"key": ""}}).instance.key == "nomi"
+
     cfg = Config.model_validate({"instance": {"key": "小美"}})
     assert cfg.instance.key == "小美"
 

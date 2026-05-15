@@ -10,7 +10,7 @@ from .base import Base
 class InstanceIdentityConfig(Base):
     """当前 Nomi instance 的对外身份配置。"""
 
-    key: str = Field(default="", max_length=64)
+    key: str = Field(default="nomi", max_length=64)
 
     @field_validator("key")
     @classmethod
@@ -18,7 +18,7 @@ class InstanceIdentityConfig(Base):
         """校验 Nomi 对外名字。"""
         key = str(value or "").strip()
         if not key:
-            return ""
+            return "nomi"
         if ":" in key or "/" in key:
             raise ValueError("instance.key cannot contain ':' or '/'")
         if len(key) > 64:

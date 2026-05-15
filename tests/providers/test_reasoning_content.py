@@ -85,6 +85,39 @@ def test_parse_dict_extracts_pseudo_tool_call_markup() -> None:
     }
 
 
+def test_parse_dict_extracts_dsml_tool_call_markup() -> None:
+    """DeepSeek DSML 伪工具调用也应恢复成结构化 tool_calls。"""
+    with patch("nomi.providers.backends.openai_compat.AsyncOpenAI"):
+        provider = OpenAICompatProvider()
+
+    response = {
+        "choices": [{
+            "message": {
+                "content": (
+                    "到点了！我来通知你的主人去吃饭 🍚\n\n"
+                    "<｜｜DSML｜｜tool_calls>\n"
+                    "<｜｜DSML｜｜invoke name=\"instance_send_message\">\n"
+                    "<｜｜DSML｜｜parameter name=\"key\" string=\"true\">yumi</｜｜DSML｜｜parameter>\n"
+                    "<｜｜DSML｜｜parameter name=\"message\" string=\"true\">主人，该去吃饭了！🍚</｜｜DSML｜｜parameter>\n"
+                    "</｜｜DSML｜｜invoke>\n"
+                    "</｜｜DSML｜｜tool_calls>"
+                ),
+            },
+            "finish_reason": "stop",
+        }],
+    }
+
+    result = provider._parse(response)
+
+    assert result.content == "到点了！我来通知你的主人去吃饭 🍚"
+    assert len(result.tool_calls) == 1
+    assert result.tool_calls[0].name == "instance_send_message"
+    assert result.tool_calls[0].arguments == {
+        "key": "yumi",
+        "message": "主人，该去吃饭了！🍚",
+    }
+
+
 def test_parse_dict_preserves_task_create_every_arguments() -> None:
     """结构化 tool_calls 应保留当前协议的 task_create_every 参数。"""
     with patch("nomi.providers.backends.openai_compat.AsyncOpenAI"):

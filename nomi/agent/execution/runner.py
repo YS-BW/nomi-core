@@ -40,6 +40,7 @@ _COMPACTABLE_TOOLS = frozenset({
     "web_search", "web_fetch", "list_dir",
 })
 _BACKFILL_CONTENT = "[Tool result unavailable — call was interrupted or lost]"
+_TOOL_PERMISSION_DENIED_PREFIX = "当前会话没有权限执行工具"
 
 
 
@@ -69,6 +70,7 @@ class AgentRunSpec:
     checkpoint_callback: Any | None = None
     injection_callback: Any | None = None
     tool_status_callback: Callable[..., Awaitable[None]] | None = None
+    allowed_tool_names: set[str] | None = None
 
 
 @dataclass(slots=True)
@@ -698,10 +700,11 @@ class AgentRunner:
         hook: AgentHook,
         context: AgentHookContext,
     ):
+        tool_definitions = self._allowed_tool_definitions(spec)
         kwargs = self._build_request_kwargs(
             spec,
             messages,
-            tools=spec.tools.get_definitions(),
+            tools=tool_definitions,
         )
         if hook.wants_streaming():
             async def _stream(delta: str) -> None:
@@ -712,6 +715,30 @@ class AgentRunner:
                 on_content_delta=_stream,
             )
         return await self.provider.chat_with_retry(**kwargs)
+
+    def _allowed_tool_definitions(self, spec: AgentRunSpec) -> list[dict[str, Any]] | None:
+        """返回当前运行允许暴露给模型的工具定义。"""
+        definitions = spec.tools.get_definitions()
+        if spec.allowed_tool_names is None:
+            return definitions
+        allowed = {str(name) for name in spec.allowed_tool_names}
+        if not allowed:
+            return None
+        return [
+            schema
+            for schema in definitions
+            if self._tool_schema_name(schema) in allowed
+        ]
+
+    @staticmethod
+    def _tool_schema_name(schema: dict[str, Any]) -> str:
+        """从 OpenAI 或扁平工具 schema 中提取工具名。"""
+        function = schema.get("function")
+        if isinstance(function, dict):
+            name = function.get("name")
+            return name if isinstance(name, str) else ""
+        name = schema.get("name")
+        return name if isinstance(name, str) else ""
 
     async def _request_finalization_retry(
         self,
@@ -796,6 +823,23 @@ class AgentRunner:
             if spec.fail_on_tool_error:
                 return lookup_error + hint, event, RuntimeError(lookup_error)
             return lookup_error + hint, event, None
+        if spec.allowed_tool_names is not None and tool_call.name not in spec.allowed_tool_names:
+            error = f"{_TOOL_PERMISSION_DENIED_PREFIX} `{tool_call.name}`。"
+            event = {
+                "name": tool_call.name,
+                "status": "error",
+                "detail": "tool permission denied in current session",
+            }
+            await self._emit_tool_status(
+                spec,
+                tool_call,
+                status="failed",
+                result=None,
+                error=error,
+            )
+            if spec.fail_on_tool_error:
+                return error, event, RuntimeError(error)
+            return error, event, None
         prepare_call = getattr(spec.tools, "prepare_call", None)
         tool, params, prep_error = None, tool_call.arguments, None
         if callable(prepare_call):

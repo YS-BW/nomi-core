@@ -14,6 +14,49 @@ class _InstanceTool(Tool):
     def __init__(self, runtime: Any) -> None:
         """绑定当前 runtime。"""
         self._runtime = runtime
+        self._channel = ""
+        self._chat_id = ""
+        self._message_id: str | None = None
+        self._session_key: str | None = None
+
+    def set_context(
+        self,
+        channel: str,
+        chat_id: str,
+        message_id: str | None = None,
+        session_key: str | None = None,
+    ) -> None:
+        """记录当前工具执行上下文。"""
+        self._channel = str(channel or "")
+        self._chat_id = str(chat_id or "")
+        self._message_id = message_id
+        self._session_key = session_key
+
+
+@tool_parameters(
+    tool_parameters_schema(
+        required=["name"],
+        name=StringSchema("当前 Nomi instance 的新名字", min_length=1),
+    )
+)
+class InstanceSetNameTool(_InstanceTool):
+    """设置当前 instance 名字。"""
+
+    @property
+    def name(self) -> str:
+        """返回工具名。"""
+        return "instance_set_name"
+
+    @property
+    def description(self) -> str:
+        """返回工具说明。"""
+        return "设置当前 Nomi instance 的名字，并同步更新 SOUL.md 中的自称。"
+
+    async def execute(self, name: str, **kwargs: Any) -> str:
+        """执行实例改名。"""
+        del kwargs
+        result = self._runtime.set_instance_name(name)
+        return f"我现在叫 {result['key']}。"
 
 
 @tool_parameters(
@@ -45,7 +88,14 @@ class InstanceInviteCodeTool(_InstanceTool):
 
     async def execute(self, public_url: str | None = None, **kwargs: Any) -> str:
         """生成邀请码。"""
-        return self._runtime.build_instance_invite_code(public_url or kwargs.get("public_url"))
+        invite_code = self._runtime.build_instance_invite_code(
+            public_url or kwargs.get("public_url")
+        )
+        return (
+            "完整 instance 邀请码如下。最终回复用户时必须把下面整行原样发出去，"
+            "不能只发送 secret、invite_id 或任意片段，也不能改写或省略 nomi:// 前缀：\n"
+            f"{invite_code}"
+        )
 
 
 @tool_parameters(
@@ -114,10 +164,9 @@ class InstanceRelationListTool(_InstanceTool):
             return "当前没有 instance 关系。"
         lines = ["当前 instance 关系："]
         for item in relations:
-            label = item.get("name") or item["key"]
             direction = item.get("direction") or "-"
             lines.append(
-                f"- {item['key']}（{label}）："
+                f"- {item['key']}："
                 f"{item['status']} / {direction} / {item['permission']} / {item['url']}"
             )
         return "\n".join(lines)
@@ -178,29 +227,28 @@ class InstanceRelationRejectTool(_InstanceTool):
 
 @tool_parameters(
     tool_parameters_schema(
-        required=["key", "name"],
+        required=["key"],
         key=StringSchema("关系 key，例如 xmy", min_length=1),
-        name=StringSchema("备注名", min_length=1),
     )
 )
-class InstanceRelationRenameTool(_InstanceTool):
-    """更新好友备注。"""
+class InstanceRelationWithdrawTool(_InstanceTool):
+    """撤回我发出的好友申请。"""
 
     @property
     def name(self) -> str:
         """返回工具名。"""
-        return "instance_relation_rename"
+        return "instance_relation_withdraw"
 
     @property
     def description(self) -> str:
         """返回工具说明。"""
-        return "给一个 Nomi instance 关系设置或更新备注名。"
+        return "撤回我发出的、尚未被对方处理的 Nomi instance 好友申请。"
 
-    async def execute(self, key: str, name: str, **kwargs: Any) -> str:
-        """执行备注更新。"""
+    async def execute(self, key: str, **kwargs: Any) -> str:
+        """执行好友申请撤回。"""
         del kwargs
-        relation = self._runtime.rename_instance_relation(key, name)
-        return f"已把 {relation['key']} 备注为 {relation['name']}。"
+        await self._runtime.withdraw_instance_relation_request(key)
+        return f"已撤回发给 {key} 的好友申请。"
 
 
 @tool_parameters(
@@ -315,9 +363,8 @@ class InstanceSessionListTool(_InstanceTool):
             return "当前没有 instance 聊天会话。"
         lines = ["最近 instance 会话："]
         for item in sessions:
-            label = item.get("name") or item["key"]
             lines.append(
-                f"- {item['key']}（{label}）：{item['status']}，"
+                f"- {item['key']}：{item['status']}，"
                 f"{item['message_count']} 条消息，最近更新 {item.get('updated_at') or '未知'}"
             )
         return "\n".join(lines)
@@ -353,10 +400,9 @@ class InstanceSessionGetTool(_InstanceTool):
         del kwargs
         payload = self._runtime.get_instance_session_messages(key, limit=limit)
         messages = payload.get("messages") or []
-        label = payload.get("name") or payload["key"]
         if not messages:
-            return f"没有找到 {payload['key']}（{label}）的 instance 聊天记录。"
-        lines = [f"{payload['key']}（{label}）最近消息："]
+            return f"没有找到 {payload['key']} 的 instance 聊天记录。"
+        lines = [f"{payload['key']} 最近消息："]
         for item in messages:
             lines.append(f"- {item['label']}：{item['content']}")
         return "\n".join(lines)

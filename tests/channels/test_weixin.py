@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import sys
 from pathlib import Path
@@ -523,6 +524,101 @@ async def test_weixin_send_message_without_context_token_drops_outbound(tmp_path
     )
 
     channel._api_post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_weixin_send_message_uploads_media_files_before_text(tmp_path: Path) -> None:
+    channel = _make_channel(tmp_path)
+    channel._client = object()
+    channel._token = "bot-token"
+    channel._context_tokens["wx-user"] = "ctx-file-outbound"
+    file_path = tmp_path / "report.txt"
+    file_path.write_text("hello file", encoding="utf-8")
+    channel._send_file_message = AsyncMock()
+    channel._send_text_message = AsyncMock()
+
+    await channel.send_message(
+        OutboundMessage(
+            channel="weixin",
+            chat_id="wx-user",
+            content="请看附件",
+            media=[str(file_path)],
+        )
+    )
+
+    channel._send_file_message.assert_awaited_once_with(
+        "wx-user",
+        "ctx-file-outbound",
+        str(file_path),
+    )
+    channel._send_text_message.assert_awaited_once_with(
+        "wx-user",
+        "ctx-file-outbound",
+        "请看附件",
+    )
+
+
+@pytest.mark.asyncio
+async def test_weixin_send_message_skips_missing_media_file(tmp_path: Path) -> None:
+    channel = _make_channel(tmp_path)
+    channel._client = object()
+    channel._token = "bot-token"
+    channel._context_tokens["wx-user"] = "ctx-file-outbound-2"
+    missing_path = tmp_path / "missing.pdf"
+    channel._send_file_message = AsyncMock()
+    channel._send_text_message = AsyncMock()
+
+    await channel.send_message(
+        OutboundMessage(
+            channel="weixin",
+            chat_id="wx-user",
+            content="只发文本",
+            media=[str(missing_path)],
+        )
+    )
+
+    channel._send_file_message.assert_not_awaited()
+    channel._send_text_message.assert_awaited_once_with(
+        "wx-user",
+        "ctx-file-outbound-2",
+        "只发文本",
+    )
+
+
+@pytest.mark.asyncio
+async def test_weixin_send_file_message_uploads_and_sends_file_item(tmp_path: Path) -> None:
+    channel = _make_channel(tmp_path)
+    channel._client = object()
+    channel._token = "bot-token"
+    channel._sleep_before_send = AsyncMock()
+    file_path = tmp_path / "report.txt"
+    file_path.write_text("hello file", encoding="utf-8")
+    upload_info = {
+        "upload_url": "https://cdn.example.com/upload",
+        "upload_param": "token=abc",
+    }
+    channel._get_upload_url = AsyncMock(return_value=upload_info)
+    channel._upload_media_bytes = AsyncMock(return_value="encrypted-param")
+    channel._api_post = AsyncMock(return_value={"errcode": 0})
+
+    await channel._send_file_message("wx-user", "ctx-raw", str(file_path))
+
+    channel._get_upload_url.assert_awaited_once()
+    args = channel._get_upload_url.await_args.args
+    assert args[0] == "wx-user"
+    assert args[1] == "ctx-raw"
+    assert args[2] == 3
+    assert channel._upload_media_bytes.await_count == 1
+    upload_call = channel._upload_media_bytes.await_args
+    assert upload_call.args[0] == "https://cdn.example.com/upload"
+    assert upload_call.args[1] == "token=abc"
+    assert upload_call.args[2] == file_path.read_bytes()
+    sent_body = channel._api_post.await_args.args[1]
+    item = sent_body["msg"]["item_list"][0]
+    assert item["type"] == 4
+    assert item["file_item"]["file_name"] == "report.txt"
+    assert item["file_item"]["media"]["encrypt_query_param"] == "encrypted-param"
+    assert base64.b64decode(item["file_item"]["aes_key"]).hex() == item["file_item"]["aes_key_hex"]
 
 
 @pytest.mark.asyncio

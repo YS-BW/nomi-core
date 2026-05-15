@@ -252,14 +252,23 @@ class AgentLoop:
         published = False
         for reminder in self.tasks.list_pending_reminders(consumer):
             if consumer == "remote":
+                session_id = AgentLoop._find_latest_session_for_channel(self, "remote")
+                if session_id is None:
+                    session_id = str(reminder.session_id or "remote:notifications")
+                AgentLoop._append_global_reminder_to_session(
+                    self,
+                    session_id=session_id,
+                    content=reminder.content,
+                    task_id=reminder.task_id,
+                )
                 message = OutboundMessage(
                     channel="remote",
-                    chat_id=reminder.session_id,
+                    chat_id=session_id,
                     content=reminder.content,
                     metadata={
                         "_task_delivery_id": reminder.task_id,
                         "_global_reminder_broadcast": True,
-                        "_session_id": reminder.session_id,
+                        "_session_id": session_id,
                     },
                 )
             elif consumer == "cli":
@@ -273,10 +282,16 @@ class AgentLoop:
                     },
                 )
             else:
-                session_id = self._find_latest_session_for_channel(consumer)
+                session_id = AgentLoop._find_latest_session_for_channel(self, consumer)
                 if session_id is None:
                     continue
                 _channel, chat_id = session_id.split(":", 1)
+                AgentLoop._append_global_reminder_to_session(
+                    self,
+                    session_id=session_id,
+                    content=reminder.content,
+                    task_id=reminder.task_id,
+                )
                 message = OutboundMessage(
                     channel=consumer,
                     chat_id=chat_id,
@@ -290,6 +305,33 @@ class AgentLoop:
             self.tasks.mark_reminder_delivered(reminder.id, consumer)
             published = True
         return published
+
+    @staticmethod
+    def _append_global_reminder_to_session(
+        loop,
+        *,
+        session_id: str,
+        content: str,
+        task_id: str,
+    ) -> None:
+        """把全局提醒同步写入实际用户会话，保证后续回复有上下文。"""
+        from datetime import datetime
+
+        normalized_content = str(content or "").strip()
+        if not session_id or not normalized_content:
+            return
+        session = loop.sessions.get_or_create(session_id)
+        session.add_message(
+            "assistant",
+            normalized_content,
+            metadata={
+                "channel": "system",
+                "direction": "global_reminder",
+                "task_id": str(task_id or ""),
+            },
+        )
+        session.updated_at = datetime.now()
+        loop.sessions.save(session)
 
     def set_reminder_consumers(self, consumers: list[str] | tuple[str, ...] | set[str]) -> None:
         """设置当前 runtime 已挂载的提醒消费入口。"""
@@ -492,6 +534,7 @@ class AgentLoop:
         on_stream_end: Callable[..., Awaitable[None]] | None = None,
         pending_queue: asyncio.Queue | None = None,
         persist_session: bool = True,
+        allowed_tool_names: set[str] | None = None,
     ) -> DirectProcessResult:
         """处理单条消息，并返回完整执行结果。"""
         return await self._turns.process_message_result(
@@ -503,6 +546,7 @@ class AgentLoop:
             on_stream_end=on_stream_end,
             pending_queue=pending_queue,
             persist_session=persist_session,
+            allowed_tool_names=allowed_tool_names,
         )
 
     def _record_explicit_skill_mentions(
@@ -665,6 +709,7 @@ class AgentLoop:
         on_stream: Callable[[str], Awaitable[None]] | None = None,
         on_stream_end: Callable[..., Awaitable[None]] | None = None,
         persist_session: bool = True,
+        allowed_tool_names: set[str] | None = None,
     ) -> DirectProcessResult:
         """直接处理一条消息，并返回完整执行结果。"""
         return await self._dispatch_runtime.process_direct_result(
@@ -679,6 +724,7 @@ class AgentLoop:
             on_stream=on_stream,
             on_stream_end=on_stream_end,
             persist_session=persist_session,
+            allowed_tool_names=allowed_tool_names,
         )
 
     @staticmethod

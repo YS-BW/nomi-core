@@ -21,7 +21,6 @@ from nomi.agent.loop import AgentLoop
 from nomi.agent.skills.manager import SkillManager
 from nomi.bus.events import InboundMessage, OutboundMessage
 from nomi.bus.queue import MessageBus
-from nomi.config.instance import get_instance_name
 from nomi.config.loader import get_config_path, load_config, resolve_config_env_vars, save_config
 from nomi.config.paths import get_data_dir
 from nomi.config.schema import Config
@@ -60,9 +59,57 @@ from nomi.runtime.models import (
 from nomi.runtime.state import RuntimeState
 from nomi.session.errors import InvalidPageTokenError, SessionNotFoundError
 from nomi.session.manager import Session
+from nomi.utils.workspace import sync_instance_name_to_soul
 
 if TYPE_CHECKING:
     from nomi.providers.base import LLMProvider
+
+INSTANCE_CHAT_TOOL_NAMES: frozenset[str] = frozenset({
+    "instance_send_message",
+    "instance_session_list",
+    "instance_session_get",
+})
+INSTANCE_RELATION_TOOL_NAMES: frozenset[str] = frozenset({
+    "instance_set_name",
+    "instance_invite_code",
+    "instance_invite",
+    "instance_relation_list",
+    "instance_relation_accept",
+    "instance_relation_reject",
+    "instance_relation_withdraw",
+    "instance_relation_remove",
+    "instance_relation_set_permission",
+})
+INSTANCE_TASK_TOOL_NAMES: frozenset[str] = frozenset({
+    "task_create_after",
+    "task_create_at",
+    "task_create_daily",
+    "task_create_every",
+    "task_list",
+    "task_get",
+    "task_delete",
+    "task_enable",
+    "task_disable",
+    "task_update_instruction",
+    "task_reschedule_after",
+    "task_reschedule_at",
+    "task_reschedule_daily",
+    "task_reschedule_every",
+})
+INSTANCE_ALL_EXTRA_TOOL_NAMES: frozenset[str] = frozenset({
+    "read_file",
+    "write_file",
+    "edit_file",
+    "list_dir",
+    "glob",
+    "grep",
+    "exec",
+    "list_skills",
+    "find_skills",
+    "install_skill",
+    "create_skill",
+    "uninstall_skill",
+})
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +136,7 @@ class NomiRuntime:
         self.state = state
         self.lifecycle = RuntimeLifecycle(state)
         self._bind_instance_relation_runtime()
+        self._current_instance_relation_key: str | None = None
 
     @classmethod
     def from_config(
@@ -172,6 +220,33 @@ class NomiRuntime:
         self.state.reminder_consumers = normalized
         self.agent_loop.set_reminder_consumers(normalized)
 
+    def instance_allowed_tool_names(self, permission: str) -> set[str]:
+        """按 relation 权限返回 instance 来源可用工具白名单。"""
+        allowed = set(INSTANCE_CHAT_TOOL_NAMES)
+        normalized = self.instance_relations.normalize_permission(permission)
+        if normalized in {"task", "all"}:
+            allowed.update(INSTANCE_TASK_TOOL_NAMES)
+        if normalized == "all":
+            allowed.update(INSTANCE_ALL_EXTRA_TOOL_NAMES)
+            allowed.update(INSTANCE_RELATION_TOOL_NAMES)
+            allowed.update(
+                name
+                for name in self.agent_loop.tools.tool_names
+                if str(name or "").startswith("mcp_")
+            )
+        return allowed
+
+    def instance_inbound_allowed_tool_names(self, permission: str) -> set[str]:
+        """返回其它 instance 入站 turn 的工具白名单。
+
+        `instance_send_message` 是本机用户会话联系其它 instance 的入口。其它
+        instance 已经通过当前 HTTP 请求等待回复，不能在处理该请求时再次调用
+        `instance_send_message`，否则会形成递归转发并把失败解释误当成新指令。
+        """
+        allowed = self.instance_allowed_tool_names(permission)
+        allowed.discard("instance_send_message")
+        return allowed
+
     def build_instance_invite_code(self, public_url: str | None = None) -> str:
         """生成当前 instance 的邀请信息。"""
         url = self._instance_public_url(public_url)
@@ -230,7 +305,6 @@ class NomiRuntime:
             request.to_dict()
             | {
                 "key": request.key,
-                "name": "",
                 "status": "pending",
                 "permission": request.requested_permission,
                 "direction": request.direction,
@@ -298,7 +372,7 @@ class NomiRuntime:
             raise ValueError(f"instance relation request not found: {key}")
         effective_permission = permission or request.requested_permission
         request, relation = self.instance_relations.accept_incoming(key, effective_permission)
-        await self.instance_relations.notify_relation_accepted(relation.key)
+        await self._notify_instance_relation_accepted(relation.key, relation.permission)
         payload = {
             "from_key": self._instance_key(),
             "from_url": self._instance_public_url(),
@@ -332,6 +406,24 @@ class NomiRuntime:
             logger.warning("Instance relation reject callback failed: key={} error={}", key, exc)
         return True
 
+    async def withdraw_instance_relation_request(self, key: str) -> dict:
+        """撤回一条我发出的 pending instance 好友申请。"""
+        request = self.instance_relations.withdraw_outgoing(key)
+        payload = {
+            "from_key": self._instance_key(),
+            "from_url": self._instance_public_url(),
+            "status": "withdrawn",
+        }
+        try:
+            await self.instance_relations.client.send_relation_response(request, payload)
+        except Exception as exc:
+            logger.warning(
+                "Instance relation withdraw callback failed: key={} error={}",
+                key,
+                exc,
+            )
+        return request.to_dict() | {"key": request.key, "withdrawn": True}
+
     async def remove_instance_relation(self, key: str) -> dict:
         """删除一条已建立 instance 关系并尽力通知对方。"""
         relation = self.instance_relations.remove_relation(key)
@@ -349,11 +441,6 @@ class NomiRuntime:
     def set_instance_relation_permission(self, key: str, permission: str) -> dict:
         """修改本地授予对方的权限。"""
         relation = self.instance_relations.set_permission(key, permission)
-        return relation.to_dict() | {"key": relation.key}
-
-    def rename_instance_relation(self, key: str, name: str) -> dict:
-        """更新 instance 关系备注。"""
-        relation = self.instance_relations.rename(key, name)
         return relation.to_dict() | {"key": relation.key}
 
     async def send_instance_message(self, key: str, message: str) -> dict:
@@ -430,11 +517,104 @@ class NomiRuntime:
             response_token=response_token,
             invite_id=invite.invite_id,
         )
-        await self.instance_relations.notify_relation_request(
+        await self._notify_instance_relation_request(
             request.key,
             request.requested_permission,
         )
         return {"ok": True, "status": "pending", "key": request.key}
+
+    async def _notify_instance_relation_request(
+        self,
+        key: str,
+        requested_permission: str,
+    ) -> None:
+        """用本机模型生成好友申请提醒并投递到全局通知。"""
+        notification = getattr(self.instance_relations, "notification", None)
+        if notification is None:
+            return
+        prompt = (
+            "你正在为本机用户生成一条 instance 好友申请提醒。\n"
+            f"事件：名为 {key} 的 Nomi instance 发来好友申请，"
+            f"请求 {requested_permission} 权限。\n"
+            "请用自然、简洁的口吻告诉用户这件事，并提醒用户可以决定接受、拒绝、"
+                "信任。\n"
+                "不要替用户做决定，不要调用工具，不要提到工具名、内部字段或接口。"
+        )
+        content = ""
+        try:
+            result = await self.agent_loop.process_direct_result(
+                prompt,
+                session_key="instance:notifications",
+                channel="instance",
+                chat_id="notifications",
+                sender_id="system",
+                metadata={
+                    "_session_id": "instance:notifications",
+                    "_actor": "system",
+                    "_instance_event": "relation_request",
+                    "_instance_peer_key": key,
+                },
+                persist_session=False,
+                allowed_tool_names=set(),
+            )
+            content = str(result.final_content or "").strip()
+        except Exception as exc:
+            logger.warning(
+                "Instance relation request notification generation failed: key={} error={}",
+                key,
+                exc,
+            )
+        if content:
+            notification.enqueue_global(
+                notification_id=f"instance_relation_request:{key}",
+                content=content,
+            )
+            return
+        await self.instance_relations.notify_relation_request(key, requested_permission)
+
+    async def _notify_instance_relation_accepted(self, key: str, permission: str) -> None:
+        """用本机模型生成关系通过提醒并投递到全局通知。"""
+        notification = getattr(self.instance_relations, "notification", None)
+        if notification is None:
+            return
+        prompt = (
+            "你正在为本机用户生成一条 instance 好友关系通过后的提醒。\n"
+            f"事件：名为 {key} 的 Nomi instance 已经添加成功，当前授予对方 "
+            f"{permission} 权限。\n"
+            "请用自然、简洁的口吻告诉用户关系已建立。"
+            "不要要求用户再设置额外名称，不要调用工具，不要提到工具名、内部字段或接口。"
+        )
+        content = ""
+        try:
+            result = await self.agent_loop.process_direct_result(
+                prompt,
+                session_key="instance:notifications",
+                channel="instance",
+                chat_id="notifications",
+                sender_id="system",
+                metadata={
+                    "_session_id": "instance:notifications",
+                    "_actor": "system",
+                    "_instance_event": "relation_accepted",
+                    "_instance_peer_key": key,
+                },
+                persist_session=False,
+                allowed_tool_names=set(),
+            )
+            content = str(result.final_content or "").strip()
+        except Exception as exc:
+            logger.warning(
+                "Instance relation accepted notification generation failed: key={} error={}",
+                key,
+                exc,
+            )
+        if content:
+            notification.enqueue_global(
+                notification_id=f"instance_relation_accepted:{key}",
+                content=content,
+            )
+            return
+        await self.instance_relations.notify_relation_accepted(key)
 
     async def receive_instance_relation_response(
         self,
@@ -455,12 +635,17 @@ class NomiRuntime:
                 relation_id=str(payload.get("relation_id") or "").strip(),
                 relation_token=str(payload.get("relation_token") or "").strip(),
             )
-            await self.instance_relations.notify_relation_accepted(relation.key)
+            await self._notify_instance_relation_accepted(relation.key, relation.permission)
             return {"ok": True, "status": "accepted", "key": relation.key}
         if status == "rejected":
             request = self._require_outgoing_response_token(key, response_token)
             self.instance_relations.reject_outgoing(request.key)
             return {"ok": True, "status": "rejected", "key": request.key}
+        if status == "withdrawn":
+            request = self._require_incoming_response_token(key, response_token)
+            self.instance_relations.apply_remote_withdraw(request.key)
+            await self.instance_relations.notify_relation_withdrawn(request.key)
+            return {"ok": True, "status": "withdrawn", "key": request.key}
         if status == "removed":
             relation = self.instance_relations.require_by_relation_token(
                 relation_id=str(relation_id or ""),
@@ -489,20 +674,27 @@ class NomiRuntime:
             required="chat",
         )
         session_key = self._instance_session_key(relation.key)
-        result = await self.agent_loop.process_direct_result(
-            content,
-            session_key=session_key,
-            channel="instance",
-            chat_id=relation.key,
-            sender_id=f"instance:{relation.key}",
-            metadata={
-                "_session_id": session_key,
-                "_actor": "instance",
-                "_instance_relation_key": relation.key,
-                "_instance_direction": "inbound",
-                "_instance_peer_key": relation.key,
-            },
-        )
+        self._current_instance_relation_key = relation.key
+        try:
+            result = await self.agent_loop.process_direct_result(
+                content,
+                session_key=session_key,
+                channel="instance",
+                chat_id=relation.key,
+                sender_id=f"instance:{relation.key}",
+                metadata={
+                    "_session_id": session_key,
+                    "_actor": "instance",
+                    "_instance_relation_key": relation.key,
+                    "_instance_direction": "inbound",
+                    "_instance_peer_key": relation.key,
+                },
+                allowed_tool_names=self.instance_inbound_allowed_tool_names(
+                    relation.permission
+                ),
+            )
+        finally:
+            self._current_instance_relation_key = None
         self._annotate_latest_instance_messages(
             relation.key,
             user_direction="inbound",
@@ -534,7 +726,6 @@ class NomiRuntime:
                 {
                     "key": key,
                     "session_id": session_id,
-                    "name": relation.name if relation is not None else "",
                     "status": "active" if relation is not None else "unknown",
                     "permission": relation.permission if relation is not None else "",
                     "message_count": int(item.get("message_count") or 0),
@@ -557,7 +748,6 @@ class NomiRuntime:
         return {
             "key": relation_key,
             "session_id": session_id,
-            "name": relation.name if relation is not None else "",
             "status": "active" if relation is not None else "unknown",
             "messages": [
                 self._format_instance_session_message(item)
@@ -578,27 +768,23 @@ class NomiRuntime:
         content: str,
         direction: str,
         actor: str,
+        metadata: dict | None = None,
     ) -> None:
         """向本地 instance 会话追加一条带元数据的消息。"""
         relation_key = str(key or "").strip()
         session = self.agent_loop.sessions.get_or_create(self._instance_session_key(relation_key))
-        relation = self.instance_relations.get_relation(relation_key)
         session.metadata["source"] = "instance"
         session.metadata["peer_key"] = relation_key
-        if relation is not None and relation.name:
-            session.metadata["title"] = relation.name
-        elif "title" not in session.metadata:
+        if "title" not in session.metadata:
             session.metadata["title"] = relation_key
-        session.add_message(
-            role,
-            content,
-            metadata={
+        message_metadata = {
                 "channel": "instance",
                 "peer_key": relation_key,
                 "direction": direction,
                 "actor": actor,
-            },
-        )
+            }
+        message_metadata.update(dict(metadata or {}))
+        session.add_message(role, content, metadata=message_metadata)
         self.agent_loop.sessions.save(session)
 
     def _annotate_latest_instance_messages(
@@ -642,18 +828,15 @@ class NomiRuntime:
     def _ensure_instance_session_metadata(self, session: Session, key: str) -> None:
         """确保 instance 会话摘要元数据完整。"""
         relation_key = str(key or "").strip()
-        relation = self.instance_relations.get_relation(relation_key)
         session.metadata["source"] = "instance"
         session.metadata["peer_key"] = relation_key
-        if relation is not None and relation.name:
-            session.metadata["title"] = relation.name
-        elif "title" not in session.metadata:
+        if "title" not in session.metadata:
             session.metadata["title"] = relation_key
 
     def _instance_key(self) -> str:
         """返回当前实例对外展示的 key。"""
         key = str(getattr(self.state.config.instance, "key", "") or "").strip()
-        return key or (get_instance_name() or "default")
+        return key or "nomi"
 
     def _instance_public_url(self, public_url: str | None = None) -> str:
         """返回当前实例对外 HTTP URL。"""
@@ -688,6 +871,16 @@ class NomiRuntime:
             raise PermissionError("invalid instance relation response token")
         return request
 
+    def _require_incoming_response_token(self, key: str, token: str | None):
+        """校验 pending incoming 申请的 response token。"""
+        normalized_key = normalize_key(key)
+        request = self.instance_relations.get_request(normalized_key)
+        if request is None or request.direction != "incoming":
+            raise ValueError(f"instance relation request not found: {normalized_key}")
+        if request.response_token != str(token or "").strip():
+            raise PermissionError("invalid instance relation response token")
+        return request
+
     @staticmethod
     def _format_instance_session_message(message: dict) -> dict:
         """把 instance 原始消息格式化为查询工具可读结构。"""
@@ -713,6 +906,7 @@ class NomiRuntime:
             "direction": direction,
             "actor": actor,
             "label": label,
+            "request_id": metadata.get("request_id") or "",
         }
 
     def interrupt_session(
@@ -1869,20 +2063,22 @@ class NomiRuntime:
             InstanceRelationListTool,
             InstanceRelationRejectTool,
             InstanceRelationRemoveTool,
-            InstanceRelationRenameTool,
             InstanceRelationSetPermissionTool,
+            InstanceRelationWithdrawTool,
             InstanceSendMessageTool,
+            InstanceSetNameTool,
             InstanceSessionGetTool,
             InstanceSessionListTool,
         )
 
+        tools.register(InstanceSetNameTool(self))
         tools.register(InstanceInviteCodeTool(self))
         tools.register(InstanceInviteTool(self))
         tools.register(InstanceRelationListTool(self))
         tools.register(InstanceRelationAcceptTool(self))
         tools.register(InstanceRelationRejectTool(self))
+        tools.register(InstanceRelationWithdrawTool(self))
         tools.register(InstanceRelationRemoveTool(self))
-        tools.register(InstanceRelationRenameTool(self))
         tools.register(InstanceRelationSetPermissionTool(self))
         tools.register(InstanceSendMessageTool(self))
         tools.register(InstanceSessionListTool(self))
@@ -1904,7 +2100,12 @@ class NomiRuntime:
         config = self._load_runtime_config_from_disk()
         config.instance.key = InstanceIdentityConfig(key=key).key
         self._save_runtime_config(config)
-        return {"key": config.instance.key}
+        soul_path = sync_instance_name_to_soul(config.workspace_path, config.instance.key)
+        return {"key": config.instance.key, "soul_path": str(soul_path)}
+
+    def set_instance_name(self, name: str) -> dict:
+        """设置当前实例对外名字。"""
+        return self.set_instance_key(name)
 
     def _require_provider_spec(self, provider_name: str):
         """读取并校验一个 provider 元数据定义。"""

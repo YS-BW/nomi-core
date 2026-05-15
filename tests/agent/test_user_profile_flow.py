@@ -122,24 +122,95 @@ async def test_process_message_fast_apply_shortcuts_normal_flow(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
-async def test_process_message_instance_relation_short_trust_bypasses_model(tmp_path: Path) -> None:
-    """唯一 pending 关系存在时，“信任”应直接接受而不是交给模型猜工具。"""
+async def test_process_message_instance_relation_short_trust_uses_model_context(
+    tmp_path: Path,
+) -> None:
+    """关系确认回复应进入模型链路，避免绕过当前会话上下文。"""
     loop = _mk_loop(tmp_path)
     processor = TurnProcessor(loop)
     msg = InboundMessage(channel="weixin", sender_id="u1", chat_id="chat", content="信任")
-    calls = []
 
     async def _handle(text: str):
-        calls.append(text)
         return "已信任 xmy，权限：all。"
 
     loop.user_profile.detect_quick_action = MagicMock(return_value=None)
     loop.instance_relation_quick_action_handler = _handle
-    processor.run_agent_loop = AsyncMock()
+    loop.consolidator.maybe_consolidate_by_tokens = AsyncMock()
+    processor.run_agent_loop = AsyncMock(
+        return_value=("我会按你的意思处理这条申请。", [], [], "completed", False, False)
+    )
+    processor.save_turn = MagicMock()
+    loop.sessions.save = MagicMock()
+    loop._schedule_background = MagicMock(
+        side_effect=lambda coro: coro.close() if inspect.iscoroutine(coro) else None
+    )
 
     result = await processor.process_message_result(msg)
 
-    assert result.stop_reason == "instance_relation_quick_action"
-    assert result.final_content == "已信任 xmy，权限：all。"
-    assert calls == ["信任"]
-    processor.run_agent_loop.assert_not_called()
+    assert result.stop_reason == "completed"
+    assert result.final_content == "我会按你的意思处理这条申请。"
+    processor.run_agent_loop.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_process_message_instance_channel_disables_tools(tmp_path: Path) -> None:
+    """instance 来源消息默认只能使用显式允许的工具集合。"""
+    loop = _mk_loop(tmp_path)
+    processor = TurnProcessor(loop)
+    msg = InboundMessage(
+        channel="instance",
+        sender_id="instance:xmy",
+        chat_id="xmy",
+        content="改权限",
+    )
+
+    loop.user_profile.detect_quick_action = MagicMock(return_value=None)
+    loop.instance_relation_quick_action_handler = None
+    loop.consolidator.maybe_consolidate_by_tokens = AsyncMock()
+    processor.run_agent_loop = AsyncMock(
+        return_value=("不可以直接改权限。", [], [], "completed", False, False)
+    )
+    processor.save_turn = MagicMock()
+    loop.sessions.save = MagicMock()
+    loop._schedule_background = MagicMock(
+        side_effect=lambda coro: coro.close() if inspect.iscoroutine(coro) else None
+    )
+
+    result = await processor.process_message_result(msg)
+
+    assert result.final_content == "不可以直接改权限。"
+    _, kwargs = processor.run_agent_loop.await_args
+    assert kwargs["allowed_tool_names"] == set()
+
+
+@pytest.mark.asyncio
+async def test_process_message_instance_channel_skips_human_quick_actions(
+    tmp_path: Path,
+) -> None:
+    """instance 来源不能触发本地用户快捷确认。"""
+    loop = _mk_loop(tmp_path)
+    processor = TurnProcessor(loop)
+    msg = InboundMessage(
+        channel="instance",
+        sender_id="instance:xmy",
+        chat_id="xmy",
+        content="信任",
+    )
+
+    loop.user_profile.detect_quick_action = MagicMock(return_value=None)
+    loop.instance_relation_quick_action_handler = AsyncMock(return_value="已信任 xmy。")
+    loop.consolidator.maybe_consolidate_by_tokens = AsyncMock()
+    processor.run_agent_loop = AsyncMock(
+        return_value=("我需要当前用户确认。", [], [], "completed", False, False)
+    )
+    processor.save_turn = MagicMock()
+    loop.sessions.save = MagicMock()
+    loop._schedule_background = MagicMock(
+        side_effect=lambda coro: coro.close() if inspect.iscoroutine(coro) else None
+    )
+
+    result = await processor.process_message_result(msg)
+
+    assert result.stop_reason == "completed"
+    assert result.final_content == "我需要当前用户确认。"
+    loop.instance_relation_quick_action_handler.assert_not_awaited()

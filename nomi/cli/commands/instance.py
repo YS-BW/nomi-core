@@ -32,7 +32,7 @@ from nomi.runtime.service.runner import (
     stop_background_service,
 )
 from nomi.runtime.service.state import get_service_log_path
-from nomi.utils.workspace import sync_workspace_templates
+from nomi.utils.workspace import sync_instance_name_to_soul, sync_workspace_templates
 
 
 def register_instance_command(app: typer.Typer) -> None:
@@ -100,7 +100,12 @@ def register_instance_command(app: typer.Typer) -> None:
             return
         loaded_config.instance.key = InstanceIdentityConfig(key=new_key).key
         save_config(loaded_config, get_config_path())
+        soul_path = sync_instance_name_to_soul(
+            loaded_config.workspace_path,
+            loaded_config.instance.key,
+        )
         console.print(f"[green]✓[/green] instance key 已更新为：{loaded_config.instance.key}")
+        console.print(f"[dim]已同步 SOUL.md：{soul_path}[/dim]")
 
     @instance_app.command("invite")
     def invite(
@@ -146,7 +151,6 @@ def register_instance_command(app: typer.Typer) -> None:
         runtime = make_runtime(loaded_config)
         table = Table(show_header=True, header_style="bold cyan")
         table.add_column("Key", style="cyan", no_wrap=True)
-        table.add_column("Name", style="white")
         table.add_column("Status", style="white")
         table.add_column("Direction", style="white")
         table.add_column("Permission", style="white")
@@ -154,7 +158,6 @@ def register_instance_command(app: typer.Typer) -> None:
         for relation in runtime.list_instance_relations():
             table.add_row(
                 relation["key"],
-                relation.get("name") or "-",
                 relation.get("status") or "-",
                 relation.get("direction") or "-",
                 relation.get("permission") or "-",
@@ -207,15 +210,14 @@ def register_instance_command(app: typer.Typer) -> None:
         asyncio.run(runtime.reject_instance_relation_async(key))
         console.print(f"[green]✓[/green] 已拒绝 {key}")
 
-    @instance_app.command("rename")
-    def rename(
+    @instance_app.command("withdraw")
+    def withdraw(
         key: str,
-        name: str,
         config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
         instance: str | None = instance_option(),
         instance_root: str | None = instance_root_option(),
     ) -> None:
-        """更新实例关系备注。"""
+        """撤回一条我发出的实例好友申请。"""
         loaded_config = load_runtime_config(
             config,
             None,
@@ -224,8 +226,10 @@ def register_instance_command(app: typer.Typer) -> None:
             silent=True,
         )
         runtime = make_runtime(loaded_config)
-        relation = runtime.rename_instance_relation(key, name)
-        console.print(f"[green]✓[/green] 已把 {relation['key']} 备注为 {relation['name']}")
+        import asyncio
+
+        asyncio.run(runtime.withdraw_instance_relation_request(key))
+        console.print(f"[green]✓[/green] 已撤回发给 {key} 的好友申请")
 
     @instance_app.command("remove-relation")
     def remove_relation(

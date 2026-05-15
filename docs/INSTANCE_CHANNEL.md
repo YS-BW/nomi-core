@@ -6,8 +6,7 @@ Instance Channel 是实例之间的基础关系与聊天通道。它不是独立
 
 当前关系模型固定为：
 
-- `instance.key` 是用户给自己 Nomi 设置的名字，默认由实例名推导，允许中文，但不能包含 `:` 或 `/`。
-- `name` 是我给对方 Nomi 的本地备注，只影响展示，不影响关系 key 和 session id。
+- `instance.key` 是用户给自己 Nomi 设置的名字，默认是 `nomi`，允许中文，但不能包含 `:` 或 `/`。
 - 邀请码只用于发起申请，每次生成都会刷新旧邀请码。
 - 申请只保存在 pending request 中，接受或拒绝后会删除。
 - 接受后才写入 relation，并生成 `relation_id + relation_token`。
@@ -16,11 +15,9 @@ Instance Channel 是实例之间的基础关系与聊天通道。它不是独立
 
 权限固定为：
 
-- `chat`：允许实例聊天。
-- `task`：预留给后续“请求创建任务”能力。
-- `all`：预留给后续更高权限动作。
-
-当前第一版只实际使用 `chat` 权限；`task/all` 只作为关系模型和校验框架保留。
+- `chat`：允许 instance 聊天和查询 instance 会话。
+- `task`：在 `chat` 基础上，允许对方在本机 runtime 中使用 `task_*` 工具。
+- `all`：在 `task` 基础上，允许文件、命令、skill、MCP 和 instance 关系管理工具。
 
 ## 存储
 
@@ -71,7 +68,6 @@ Instance Channel 是实例之间的基础关系与聊天通道。它不是独立
   "version": 1,
   "relations": {
     "xmy": {
-      "name": "小美",
       "url": "http://127.0.0.1:8766",
       "relation_id": "rel_xxx",
       "relation_token": "xxx",
@@ -87,9 +83,9 @@ Instance Channel 是实例之间的基础关系与聊天通道。它不是独立
 
 关键实现：
 
-- [nomi/instance_channel/store.py](../nomi/instance_channel/store.py#L18-L205)
-- [nomi/instance_channel/models.py](../nomi/instance_channel/models.py#L17-L156)
-- [nomi/config/paths.py](../nomi/config/paths.py#L84-L98)
+- [nomi/instance_channel/store.py](../nomi/instance_channel/store.py#L18-L216)
+- [nomi/instance_channel/models.py](../nomi/instance_channel/models.py#L17-L157)
+- [nomi/config/paths.py](../nomi/config/paths.py#L84-L99)
 
 ## 邀请流程
 
@@ -128,22 +124,24 @@ xmy 发来好友申请，请求 chat 权限。可以回复：同意 / 拒绝 / �
 
 如果当前只有一个待确认申请，用户可以在任意入口直接回复 `同意`、`拒绝` 或 `信任`。这类短回复会在 core 侧确定性处理，不进入模型工具选择；如果同时存在多个待确认申请，必须带上关系 key，例如 `信任 xmy`。
 
-5. A 接受、拒绝、备注、删除或改权限：
+5. A 接受、拒绝、删除或改权限：
 
 ```bash
 nomi instance accept xmy --permission chat
 nomi instance reject xmy
-nomi instance rename xmy 小美
+nomi instance withdraw xmy
 nomi instance permission xmy all
 nomi instance remove-relation xmy
 ```
 
 接受后 A 本地生成 `relation_id + relation_token` 并写入 relation，再用申请里的 `response_token` 回调 B。B 收到 accepted 后删除 outgoing request，写入 relation；B 本地授予 A 的 `permission` 默认是 `chat`，之后可自行调整。
 
+撤回只作用于本实例发出的 outgoing pending request：本地删除 outgoing 申请，并尽力通知对方删除对应 incoming 申请。它不等价于拒绝申请，也不删除已建立关系。
+
 核心流程：
 
-- [nomi/runtime/app.py](../nomi/runtime/app.py#L174-L472)
-- [nomi/instance_channel/manager.py](../nomi/instance_channel/manager.py#L31-L315)
+- [nomi/runtime/app.py](../nomi/runtime/app.py#L242-L609)
+- [nomi/instance_channel/manager.py](../nomi/instance_channel/manager.py#L34-L387)
 - [nomi/instance_channel/invite.py](../nomi/instance_channel/invite.py#L12-L42)
 
 ## HTTP 通道
@@ -166,7 +164,7 @@ POST /v1/instance/messages
 鉴权规则：
 
 - `/relations/request` 使用 `X-Nomi-Invite-Id` 和 `Authorization: Bearer <invite-secret>`。
-- `/relations/response` 的 accepted/rejected 回调用 `Authorization: Bearer <response-token>`。
+- `/relations/response` 的 accepted/rejected/withdrawn 回调用 `Authorization: Bearer <response-token>`。
 - `/relations/response` 的 removed 通知使用 `X-Nomi-Relation-Id` 和 `Authorization: Bearer <relation-token>`。
 - `/messages` 使用 `X-Nomi-Relation-Id` 和 `Authorization: Bearer <relation-token>`。
 - `remote.auth_token` 只用于 desktop/remote API，不再代表好友身份。
@@ -192,6 +190,15 @@ actor = "instance"
 - [nomi/templates/CHANNEL_INSTANCE.md](../nomi/templates/CHANNEL_INSTANCE.md#L1-L5)
 - [nomi/agent/context/system_prompt.py](../nomi/agent/context/system_prompt.py#L69-L79)
 
+Instance 来源消息还有硬权限边界：
+
+- 不触发当前用户的快捷确认，例如 `同意`、`信任`、`拒绝`。
+- 不执行 slash command。
+- 不抽取当前用户画像。
+- 只向模型暴露本机授予对方权限对应的工具白名单；即使模型返回未授权工具调用，执行层也会拒绝。
+
+因此 `chat` 权限不能让对方主动打扰本机用户、修改关系权限、创建任务、安装 skill 或修改 MCP；`task` 才能使用任务工具；`all` 才能使用文件、命令、skill、MCP 和关系管理工具。
+
 ## Instance 会话
 
 双方都会写入自己的唯一 instance 会话：
@@ -206,7 +213,7 @@ instance:<relation-key>
 - inbound：对方返回的回复。
 - error：HTTP 调用失败时的错误记录。
 
-接收方也写入同一条 `instance:<local-relation-key>` 会话，用户后续问“刚才和哪个 Nomi 聊了什么”时，可由工具读取。关系备注只影响展示名，不改变 session id。
+接收方也写入同一条 `instance:<local-relation-key>` 会话，用户后续问“刚才和哪个 Nomi 聊了什么”时，可由工具读取。
 
 每条 instance 会话消息会带内部 metadata：
 
@@ -221,40 +228,42 @@ instance:<relation-key>
 
 消息执行入口：
 
-- [nomi/runtime/app.py](../nomi/runtime/app.py#L358-L517)
+- [nomi/runtime/app.py](../nomi/runtime/app.py#L611-L740)
 
 ## Agent 工具
 
 当前注册到 runtime 的 instance 关系工具：
 
+- `instance_set_name`
 - `instance_invite_code`
 - `instance_invite`
 - `instance_relation_list`
 - `instance_relation_accept`
 - `instance_relation_reject`
+- `instance_relation_withdraw`
 - `instance_relation_remove`
 - `instance_relation_set_permission`
-- `instance_relation_rename`
 - `instance_send_message`
 - `instance_session_list`
 - `instance_session_get`
 
-工具定义在 [nomi/agent/tools/instance_relations.py](../nomi/agent/tools/instance_relations.py#L19-L363)，由 runtime 在初始化和 reload 后注册：
+工具定义在 [nomi/agent/tools/instance_relations.py](../nomi/agent/tools/instance_relations.py#L19-L412)，由 runtime 在初始化和 reload 后注册：
 
-- [nomi/runtime/app.py](../nomi/runtime/app.py#L1833-L1872)
+- [nomi/runtime/app.py](../nomi/runtime/app.py#L2001-L2042)
 
 用户可以在微信、desktop 或 CLI 里自然表达：
 
 ```text
 生成我的 instance 邀请码，地址用 http://127.0.0.1:8765
+你现在就叫小美
 用这个邀请码加好友：nomi://instance-invite?...
 同意
 信任 xmy
-备注 xmy 为 小美
+撤回发给 xmy 的申请
 删除 xmy 好友
 把 xmy 权限改为 all
-问一下小美几点方便
-你刚才和小美聊了什么
+问一下 xmy 几点方便
+你刚才和 xmy 聊了什么
 ```
 
 ## 当前边界
@@ -266,7 +275,6 @@ instance:<relation-key>
 - 独立端口。
 - desktop 协议变更。
 - 旧版关系迁移。
-- `task_request`、skill/MCP 授权执行。
 - 关系冲突自动改名。
 
 如果同一个 key 已存在 relation 或 pending request，新的申请会直接拒绝。删除好友关系会删除本地 relation，并尽力通知对方删除。

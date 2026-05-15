@@ -26,6 +26,7 @@ class _LoopStub:
         self.sessions = SessionManager(workspace)
         self.process_direct = AsyncMock(return_value="ok")
         self.process_direct_result = AsyncMock(side_effect=self._process_direct_result)
+        self.notification_content = "pong"
 
     async def _process_direct_result(self, content: str, **kwargs) -> SimpleNamespace:
         """模拟 AgentLoop 处理消息并写入 session。"""
@@ -36,7 +37,7 @@ class _LoopStub:
         self.sessions.save(session)
         return SimpleNamespace(
             session_key=session_key,
-            final_content="pong",
+            final_content=self.notification_content,
             stop_reason="completed",
         )
 
@@ -71,7 +72,10 @@ class _QuickActionLoopStub(_LoopStub):
         """初始化测试用 AgentLoop stub。"""
         super().__init__(workspace)
         self.tasks = SimpleNamespace(enqueue_global_reminder=lambda **_kwargs: True)
-        self.tools = SimpleNamespace(register=lambda _tool: None)
+        self.registered_tools = []
+        self.tools = SimpleNamespace(
+            register=lambda tool: self.registered_tools.append(tool.name),
+        )
         self.instance_relation_quick_action_handler = None
 
 
@@ -299,6 +303,7 @@ async def test_runtime_receive_instance_message_uses_instance_identity(tmp_path:
             "_instance_direction": "inbound",
             "_instance_peer_key": "xmy",
         },
+        allowed_tool_names=runtime.instance_allowed_tool_names("chat"),
     )
     session = runtime.agent_loop.sessions.get("instance:xmy")
     assert session is not None
@@ -434,7 +439,7 @@ async def test_runtime_send_instance_message_records_sender_session(tmp_path: Pa
 
     assert result["content"] == "remote pong"
     assert result["session_id"] == "instance:xmy"
-    assert client.messages[0][1]["from_key"] == "default"
+    assert client.messages[0][1]["from_key"] == "nomi"
     assert "from_token" not in client.messages[0][1]
     session = runtime.agent_loop.sessions.get("instance:xmy")
     assert session is not None
@@ -510,7 +515,6 @@ def test_runtime_instance_session_queries_format_messages(tmp_path: Path) -> Non
         agent_loop_factory=lambda **_kwargs: loop_stub,
     )
     _create_relation(runtime)
-    runtime.rename_instance_relation("xmy", "小美")
     runtime._append_instance_session_message(
         "xmy",
         role="user",
@@ -523,8 +527,59 @@ def test_runtime_instance_session_queries_format_messages(tmp_path: Path) -> Non
     messages = runtime.get_instance_session_messages("xmy")
 
     assert sessions[0]["key"] == "xmy"
-    assert sessions[0]["name"] == "小美"
     assert messages["messages"][0]["label"] == "我发给对方"
+
+
+def test_runtime_instance_allowed_tool_names_follow_permission(tmp_path: Path) -> None:
+    """instance 权限应映射到明确工具白名单。"""
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    loop_stub = _LoopStub(config.workspace_path)
+    loop_stub.tools = SimpleNamespace(
+        tool_names=["mcp_demo"],
+        register=lambda _tool: None,
+    )
+    runtime = NomiRuntime.from_config(
+        config,
+        provider_builder=lambda _config: object(),
+        agent_loop_factory=lambda **_kwargs: loop_stub,
+    )
+
+    chat = runtime.instance_allowed_tool_names("chat")
+    task = runtime.instance_allowed_tool_names("task")
+    all_tools = runtime.instance_allowed_tool_names("all")
+
+    assert "instance_send_message" in chat
+    assert "instance_session_list" in chat
+    assert "instance_session_get" in chat
+    assert "instance_ask_user" not in chat
+    assert "instance_user_request_list" not in chat
+    assert "instance_user_request_get" not in chat
+    assert "instance_relation_set_permission" not in chat
+    assert "instance_set_name" not in chat
+    assert "task_create_after" not in chat
+    assert "task_create_after" in task
+    assert "exec" not in task
+    assert "exec" in all_tools
+    assert "install_skill" in all_tools
+    assert "instance_relation_set_permission" in all_tools
+    assert "instance_set_name" in all_tools
+    assert "mcp_demo" in all_tools
+
+
+def test_runtime_registers_instance_set_name_tool(tmp_path: Path) -> None:
+    """runtime 初始化时应注册实例改名工具。"""
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    loop_stub = _QuickActionLoopStub(config.workspace_path)
+
+    NomiRuntime.from_config(
+        config,
+        provider_builder=lambda _config: object(),
+        agent_loop_factory=lambda **_kwargs: loop_stub,
+    )
+
+    assert "instance_set_name" in loop_stub.registered_tools
 
 
 def test_runtime_invite_code_rejects_wrong_loopback_override(tmp_path: Path) -> None:
@@ -573,8 +628,57 @@ async def test_runtime_invite_code_keeps_local_key_and_uses_remote_name_as_note(
     assert request.requested_permission == "task"
     assert client.requests[0][0]["invite_id"] == "inv-1"
     assert client.requests[0][0]["secret"] == "secret-1"
-    assert client.requests[0][1]["from_key"] == "default"
+    assert client.requests[0][1]["from_key"] == "nomi"
     assert client.requests[0][1]["requested_permission"] == "task"
+
+
+@pytest.mark.asyncio
+async def test_runtime_relation_request_notification_uses_agent_generated_text(
+    tmp_path: Path,
+) -> None:
+    """收到好友申请后应把本机模型生成的提醒投递给用户。"""
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    config.remote.host = "127.0.0.1"
+    config.remote.port = 8765
+    loop_stub = _LoopStub(config.workspace_path)
+    loop_stub.notification_content = "xmy 想加你为好友，要不要看看？"
+    runtime = NomiRuntime.from_config(
+        config,
+        provider_builder=lambda _config: object(),
+        agent_loop_factory=lambda **_kwargs: loop_stub,
+    )
+    notification = _NotificationStub()
+    runtime.instance_relations.notification = notification
+    invite, secret = runtime.instance_relations.build_invite(
+        key="default",
+        url="http://127.0.0.1:8765",
+    )
+
+    result = await runtime.receive_instance_relation_request(
+        {
+            "from_key": "xmy",
+            "from_url": "http://127.0.0.1:8766",
+            "requested_permission": "chat",
+            "response_token": "response-token",
+        },
+        invite_id=invite.invite_id,
+        invite_secret=secret,
+    )
+
+    assert result == {"ok": True, "status": "pending", "key": "xmy"}
+    loop_stub.process_direct_result.assert_awaited_once()
+    _, kwargs = loop_stub.process_direct_result.await_args
+    assert kwargs["session_key"] == "instance:notifications"
+    assert kwargs["channel"] == "instance"
+    assert kwargs["persist_session"] is False
+    assert kwargs["allowed_tool_names"] == set()
+    assert notification.calls == [
+        {
+            "notification_id": "instance_relation_request:xmy",
+            "content": "xmy 想加你为好友，要不要看看？",
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -608,6 +712,119 @@ async def test_runtime_relation_response_accepts_outgoing_request_with_response_
     assert relation.relation_id == "rel-1"
     assert relation.relation_token == "relation-token"
     assert relation.permission == "chat"
+    assert runtime.instance_relations.get_request("xmy") is None
+
+
+@pytest.mark.asyncio
+async def test_runtime_relation_accept_notification_uses_agent_generated_text(
+    tmp_path: Path,
+) -> None:
+    """关系通过后应把本机模型生成的提醒投递给用户。"""
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    loop_stub = _LoopStub(config.workspace_path)
+    loop_stub.notification_content = "xmy 已经加好了。"
+    runtime = NomiRuntime.from_config(
+        config,
+        provider_builder=lambda _config: object(),
+        agent_loop_factory=lambda **_kwargs: loop_stub,
+    )
+    notification = _NotificationStub()
+    runtime.instance_relations.notification = notification
+    _create_incoming_request(runtime, key="xmy", requested_permission="all")
+
+    result = await runtime.accept_instance_relation("xmy", "all")
+
+    assert result["key"] == "xmy"
+    loop_stub.process_direct_result.assert_awaited_once()
+    _, kwargs = loop_stub.process_direct_result.await_args
+    assert kwargs["session_key"] == "instance:notifications"
+    assert kwargs["channel"] == "instance"
+    assert kwargs["persist_session"] is False
+    assert kwargs["allowed_tool_names"] == set()
+    assert kwargs["metadata"]["_instance_event"] == "relation_accepted"
+    assert notification.calls == [
+        {
+            "notification_id": "instance_relation_accepted:xmy",
+            "content": "xmy 已经加好了。",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_runtime_relation_accept_notification_falls_back_when_agent_fails(
+    tmp_path: Path,
+) -> None:
+    """关系通过提醒生成失败时应使用短 fallback 文案。"""
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    loop_stub = _LoopStub(config.workspace_path)
+    loop_stub.process_direct_result.side_effect = RuntimeError("provider failed")
+    runtime = NomiRuntime.from_config(
+        config,
+        provider_builder=lambda _config: object(),
+        agent_loop_factory=lambda **_kwargs: loop_stub,
+    )
+    notification = _NotificationStub()
+    runtime.instance_relations.notification = notification
+    _create_incoming_request(runtime, key="xmy", requested_permission="chat")
+
+    await runtime.accept_instance_relation("xmy")
+
+    assert notification.calls == [
+        {
+            "notification_id": "instance_relation_accepted:xmy",
+            "content": "已添加 xmy。",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_runtime_withdraw_outgoing_request_deletes_local_and_notifies_peer(
+    tmp_path: Path,
+) -> None:
+    """撤回申请应删除本地 outgoing request 并用 response token 通知对方。"""
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    loop_stub = _LoopStub(config.workspace_path)
+    runtime = NomiRuntime.from_config(
+        config,
+        provider_builder=lambda _config: object(),
+        agent_loop_factory=lambda **_kwargs: loop_stub,
+    )
+    client = _InstanceClientStub()
+    runtime.instance_relations.client = client
+    _create_outgoing_request(runtime, key="xmy", response_token="response-token")
+
+    result = await runtime.withdraw_instance_relation_request("xmy")
+
+    assert result["withdrawn"] is True
+    assert runtime.instance_relations.get_request("xmy") is None
+    assert client.responses[0][0].response_token == "response-token"
+    assert client.responses[0][1]["status"] == "withdrawn"
+
+
+@pytest.mark.asyncio
+async def test_runtime_relation_response_withdraws_incoming_request_with_response_token(
+    tmp_path: Path,
+) -> None:
+    """接收方收到 withdrawn 后应校验 response token 并删除 incoming request。"""
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    loop_stub = _LoopStub(config.workspace_path)
+    runtime = NomiRuntime.from_config(
+        config,
+        provider_builder=lambda _config: object(),
+        agent_loop_factory=lambda **_kwargs: loop_stub,
+    )
+    _create_incoming_request(runtime, key="xmy", response_token="response-token")
+
+    result = await runtime.receive_instance_relation_response(
+        {"from_key": "xmy", "status": "withdrawn"},
+        response_token="response-token",
+    )
+
+    assert result == {"ok": True, "status": "withdrawn", "key": "xmy"}
     assert runtime.instance_relations.get_request("xmy") is None
 
 
@@ -683,6 +900,32 @@ def test_runtime_provider_settings_persist_to_config(
     assert saved.providers.custom.api_key == "sk-test"
     assert saved.providers.custom.api_base == "https://example.com/v1"
     assert saved.providers.custom.model == "gpt-4.1"
+
+
+def test_runtime_set_instance_key_persists_config_and_soul(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """runtime 改名应同时写回配置和 SOUL.md。"""
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "workspace")
+    config_path = tmp_path / "config.json"
+    save_config(config, config_path)
+    monkeypatch.setattr("nomi.runtime.app.get_config_path", lambda: config_path)
+
+    runtime = NomiRuntime.from_config(
+        config,
+        provider_builder=lambda _config: object(),
+        agent_loop_factory=lambda **_kwargs: _LoopStub(config.workspace_path),
+    )
+
+    result = runtime.set_instance_key("小美")
+
+    saved = Config.model_validate_json(config_path.read_text(encoding="utf-8"))
+    soul = (config.workspace_path / "SOUL.md").read_text(encoding="utf-8")
+    assert result["key"] == "小美"
+    assert saved.instance.key == "小美"
+    assert "我是 小美，一个个人 AI 助手。" in soul
 
 
 def test_runtime_list_providers_includes_management_fields(tmp_path: Path) -> None:

@@ -649,6 +649,12 @@ class _RelationRuntime:
             )
             self.instance_relations.apply_remote_remove(relation)
             return {"ok": True, "status": "removed", "key": relation.key}
+        if str(payload.get("status")) == "withdrawn":
+            request = self.instance_relations.get_request(key)
+            if request is None or request.response_token != response_token:
+                raise PermissionError("invalid response token")
+            self.instance_relations.apply_remote_withdraw(key)
+            return {"ok": True, "status": "withdrawn", "key": key}
         self.instance_relations.reject_outgoing(key)
         return {"ok": True, "status": "rejected", "key": key}
 
@@ -668,20 +674,29 @@ def _auth() -> dict[str, str]:
     return {"Authorization": "Bearer secret-token"}
 
 
-async def _next_sse_event(lines: AsyncIterator[str]) -> dict:
+async def _next_sse_event(lines: AsyncIterator[str], timeout: float | None = None) -> dict | None:
     """读取下一条 SSE 事件。"""
-    event_type = None
-    async for line in lines:
-        if not line or line.startswith(":"):
-            continue
-        if line.startswith("event: "):
-            event_type = line.removeprefix("event: ")
-            continue
-        if line.startswith("data: "):
-            payload = json.loads(line.removeprefix("data: "))
-            if event_type is not None:
-                assert payload["type"] == event_type
-            return payload
+    async def _read() -> dict:
+        event_type = None
+        async for line in lines:
+            if not line or line.startswith(":"):
+                continue
+            if line.startswith("event: "):
+                event_type = line.removeprefix("event: ")
+                continue
+            if line.startswith("data: "):
+                payload = json.loads(line.removeprefix("data: "))
+                if event_type is not None:
+                    assert payload["type"] == event_type
+                return payload
+        raise RuntimeError("SSE stream ended")
+
+    if timeout is None:
+        return await _read()
+    try:
+        return await asyncio.wait_for(_read(), timeout=timeout)
+    except TimeoutError:
+        return None
     raise AssertionError("SSE stream ended")
 
 
@@ -1143,6 +1158,116 @@ async def test_remote_instance_relation_http_accept_round_trip() -> None:
 
 
 @pytest.mark.asyncio
+async def test_remote_instance_relation_http_withdraw_round_trip() -> None:
+    """申请方撤回时，双方 pending request 都应被删除。"""
+    runtime_a = _RelationRuntime(
+        key="a",
+        url="http://127.0.0.1:8895",
+    )
+    runtime_b = _RelationRuntime(
+        key="b",
+        url="http://127.0.0.1:8896",
+    )
+    config_a = _config(8895)
+    config_b = _config(8896)
+    config_a.remote.auth_token = "token-a"
+    config_b.remote.auth_token = "token-b"
+    server_a = RemoteServer(config_a, runtime_a)  # type: ignore[arg-type]
+    server_b = RemoteServer(config_b, runtime_b)  # type: ignore[arg-type]
+
+    await server_a.start()
+    await server_b.start()
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            invite_id, invite_secret = runtime_b.build_invite()
+            response_token = "response-token-a"
+            runtime_a.instance_relations.create_outgoing_request(
+                key="b",
+                url="http://127.0.0.1:8896",
+                requested_permission="chat",
+                response_token=response_token,
+                invite_id=invite_id,
+            )
+            request = await client.post(
+                "http://127.0.0.1:8896/v1/instance/relations/request",
+                headers={
+                    "X-Nomi-Invite-Id": invite_id,
+                    "Authorization": f"Bearer {invite_secret}",
+                },
+                json={
+                    "from_key": "a",
+                    "from_url": "http://127.0.0.1:8895",
+                    "requested_permission": "chat",
+                    "response_token": response_token,
+                },
+            )
+            assert request.status_code == 200
+            runtime_a.instance_relations.withdraw_outgoing("b")
+
+            withdraw = await client.post(
+                "http://127.0.0.1:8896/v1/instance/relations/response",
+                headers={"Authorization": f"Bearer {response_token}"},
+                json={"from_key": "a", "status": "withdrawn"},
+            )
+
+            assert withdraw.status_code == 200
+            assert runtime_a.instance_relations.get_request("b") is None
+            assert runtime_b.instance_relations.get_request("a") is None
+    finally:
+        await server_a.stop()
+        await server_b.stop()
+
+
+@pytest.mark.asyncio
+async def test_remote_instance_user_request_routes_are_removed() -> None:
+    """开放式用户请求内部路由已移除。"""
+    runtime = _FakeRuntime()
+    server = RemoteServer(_config(8897), runtime)  # type: ignore[arg-type]
+
+    await server.start()
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            unauthorized = await client.post(
+                "http://127.0.0.1:8897/v1/instance/user-requests",
+                headers=_auth(),
+                json={"prompt": "今晚有安排吗？"},
+            )
+            assert unauthorized.status_code == 404
+
+            created = await client.post(
+                "http://127.0.0.1:8897/v1/instance/user-requests",
+                headers={
+                    "X-Nomi-Relation-Id": "rel-1",
+                    "Authorization": "Bearer relation-token",
+                },
+                json={"request_id": "req-1", "prompt": "今晚有安排吗？"},
+            )
+            assert created.status_code == 404
+
+            answered = await client.post(
+                "http://127.0.0.1:8897/v1/instance/user-requests/req-1/response",
+                headers={
+                    "X-Nomi-Relation-Id": "rel-1",
+                    "Authorization": "Bearer relation-token",
+                },
+                json={"answer": "可以"},
+            )
+            assert answered.status_code == 404
+
+            cancelled = await client.post(
+                "http://127.0.0.1:8897/v1/instance/user-requests/req-2/cancel",
+                headers={
+                    "X-Nomi-Relation-Id": "rel-1",
+                    "Authorization": "Bearer relation-token",
+                },
+                json={"status": "cancelled"},
+            )
+            assert cancelled.status_code == 404
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
 async def test_remote_sse_session_save_and_global_task_delivery_events() -> None:
     """SSE 应广播跨 channel session 保存和全局任务投递。"""
     runtime = _FakeRuntime()
@@ -1193,8 +1318,20 @@ async def test_remote_sse_session_save_and_global_task_delivery_events() -> None
                         },
                     )
                 )
+
+                await runtime.bus.publish_outbound(
+                    OutboundMessage(
+                        channel="remote",
+                        chat_id="desktop:test",
+                        content="定向任务提醒",
+                        metadata={
+                            "_task_delivery_id": "task_2",
+                            "_session_id": "desktop:test",
+                        },
+                    )
+                )
                 delivered = await asyncio.wait_for(_next_sse_event(lines), timeout=2.0)
                 assert delivered["type"] == "task.delivered"
-                assert delivered["data"]["content"] == "全局提醒"
+                assert delivered["data"]["content"] == "定向任务提醒"
     finally:
         await server.stop()

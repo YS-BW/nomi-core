@@ -40,6 +40,18 @@ PSEUDO_PARAMETER_RE = re.compile(
     r"<parameter=([A-Za-z0-9_.:-]+)>(.*?)</parameter>",
     re.IGNORECASE | re.DOTALL,
 )
+DSML_TOOL_CALL_BLOCK_RE = re.compile(
+    r"<｜｜DSML｜｜tool_calls>\s*(.*?)\s*</｜｜DSML｜｜tool_calls>",
+    re.IGNORECASE | re.DOTALL,
+)
+DSML_INVOKE_RE = re.compile(
+    r"<｜｜DSML｜｜invoke\s+name=[\"']([^\"']+)[\"']\s*>\s*(.*?)\s*</｜｜DSML｜｜invoke>",
+    re.IGNORECASE | re.DOTALL,
+)
+DSML_PARAMETER_RE = re.compile(
+    r"<｜｜DSML｜｜parameter\s+name=[\"']([^\"']+)[\"'][^>]*>(.*?)</｜｜DSML｜｜parameter>",
+    re.IGNORECASE | re.DOTALL,
+)
 INT_RE = re.compile(r"^[+-]?\d+$")
 FLOAT_RE = re.compile(r"^[+-]?(?:\d+\.\d*|\d*\.\d+)$")
 
@@ -257,45 +269,97 @@ def normalize_tool_arguments(
 
 
 def extract_pseudo_tool_calls(content: str | None) -> tuple[str | None, list[ToolCallRequest]]:
-    """从伪 XML 工具调用文本里恢复结构化 tool_calls。"""
-    if not isinstance(content, str) or "<tool_call>" not in content.lower():
+    """从伪 XML/DSML 工具调用文本里恢复结构化 tool_calls。"""
+    if not isinstance(content, str):
+        return content, []
+    lowered = content.lower()
+    if "<tool_call>" not in lowered and "<｜｜dsml｜｜tool_calls>" not in lowered:
         return content, []
 
     tool_calls: list[ToolCallRequest] = []
     spans: list[tuple[int, int]] = []
-    for block in PSEUDO_TOOL_CALL_BLOCK_RE.finditer(content):
-        function_match = PSEUDO_FUNCTION_RE.search(block.group(1))
-        if function_match is None:
-            continue
-
-        tool_name = function_match.group(1).strip()
-        if not tool_name:
-            continue
-
-        arguments: dict[str, Any] = {}
-        for param in PSEUDO_PARAMETER_RE.finditer(function_match.group(2)):
-            key = param.group(1).strip()
-            if not key:
-                continue
-            arguments[key] = coerce_pseudo_parameter_value(param.group(2))
-
-        tool_calls.append(
-            ToolCallRequest(
-                id=short_tool_id(),
-                name=tool_name,
-                arguments=normalize_tool_arguments(tool_name, arguments),
-            )
-        )
-        spans.append(block.span())
+    _extract_xml_pseudo_tool_calls(content, tool_calls, spans)
+    _extract_dsml_pseudo_tool_calls(content, tool_calls, spans)
 
     if not tool_calls:
         return content, []
 
     visible_parts: list[str] = []
     last_end = 0
-    for start, end in spans:
+    for start, end in sorted(spans):
+        if start < last_end:
+            continue
         visible_parts.append(content[last_end:start])
         last_end = end
     visible_parts.append(content[last_end:])
     visible_content = "".join(visible_parts).strip() or None
     return visible_content, tool_calls
+
+
+def _extract_xml_pseudo_tool_calls(
+    content: str,
+    tool_calls: list[ToolCallRequest],
+    spans: list[tuple[int, int]],
+) -> None:
+    """提取旧版 <tool_call> 伪工具调用。"""
+    for block in PSEUDO_TOOL_CALL_BLOCK_RE.finditer(content):
+        function_match = PSEUDO_FUNCTION_RE.search(block.group(1))
+        if function_match is None:
+            continue
+        _append_pseudo_tool_call(
+            tool_calls,
+            spans,
+            tool_name=function_match.group(1),
+            raw_arguments=function_match.group(2),
+            parameter_pattern=PSEUDO_PARAMETER_RE,
+            span=block.span(),
+        )
+
+
+def _extract_dsml_pseudo_tool_calls(
+    content: str,
+    tool_calls: list[ToolCallRequest],
+    spans: list[tuple[int, int]],
+) -> None:
+    """提取 DeepSeek DSML 伪工具调用。"""
+    for block in DSML_TOOL_CALL_BLOCK_RE.finditer(content):
+        for invoke in DSML_INVOKE_RE.finditer(block.group(1)):
+            _append_pseudo_tool_call(
+                tool_calls,
+                spans,
+                tool_name=invoke.group(1),
+                raw_arguments=invoke.group(2),
+                parameter_pattern=DSML_PARAMETER_RE,
+                span=block.span(),
+            )
+
+
+def _append_pseudo_tool_call(
+    tool_calls: list[ToolCallRequest],
+    spans: list[tuple[int, int]],
+    *,
+    tool_name: str,
+    raw_arguments: str,
+    parameter_pattern: re.Pattern[str],
+    span: tuple[int, int],
+) -> None:
+    """把一次伪工具调用追加到结果列表。"""
+    normalized_name = tool_name.strip()
+    if not normalized_name:
+        return
+
+    arguments: dict[str, Any] = {}
+    for param in parameter_pattern.finditer(raw_arguments):
+        key = param.group(1).strip()
+        if not key:
+            continue
+        arguments[key] = coerce_pseudo_parameter_value(param.group(2))
+
+    tool_calls.append(
+        ToolCallRequest(
+            id=short_tool_id(),
+            name=normalized_name,
+            arguments=normalize_tool_arguments(normalized_name, arguments),
+        )
+    )
+    spans.append(span)

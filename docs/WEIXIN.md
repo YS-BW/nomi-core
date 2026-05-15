@@ -225,6 +225,23 @@ nomi instance log
 - [tests/channels/test_weixin.py](../tests/channels/test_weixin.py#L622-L661)
 - [tests/channels/test_weixin.py](../tests/channels/test_weixin.py#L665-L695)
 
+### 下行文件
+
+当前微信 channel 已支持 Nomi 主动下发本地文件：
+
+- 入口仍然复用 `OutboundMessage`
+- 如果 `message.media` 里带的是本地文件路径，微信 adapter 会先上传文件，再发送 `file_item`
+- 如果同时存在 `content`，会先发文件，再按原有逻辑发送文本
+
+当前实现只收口了文件类型，不顺手扩图片/视频下行。
+
+实现路径：
+
+- 先 `getuploadurl`
+- 本地按微信协议做 AES-128-ECB 加密上传
+- 取响应头 `x-encrypted-param`
+- 再通过 `sendmessage` 发送 `file_item`
+
 ### typing 状态
 
 当前微信已经支持官方那套 typing：

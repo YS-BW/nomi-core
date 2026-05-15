@@ -790,6 +790,8 @@ class RemoteServer:
         metadata = dict(message.metadata or {})
         session_id = str(metadata.get("_session_id") or f"{message.channel}:{message.chat_id}")
         turn_id = metadata.get("_turn_id")
+        if metadata.get("_task_delivery_id") and metadata.get("_global_reminder_broadcast"):
+            return
         if metadata.get("_task_delivery_id"):
             await self._events.publish(
                 "task.delivered",
@@ -1043,6 +1045,19 @@ class RemoteServer:
     def _path_session_id(request: web.Request) -> str:
         """读取 path 中的 session_id。"""
         return request.match_info["session_id"]
+
+    @staticmethod
+    def _instance_relation_credentials(request: web.Request) -> tuple[str, str]:
+        """读取 instance relation token 鉴权头。"""
+        relation_id = str(request.headers.get("X-Nomi-Relation-Id") or "").strip()
+        relation_token = RemoteServer._bearer_token(request)
+        if not relation_id or not relation_token:
+            raise RemoteApiError(
+                "unauthorized",
+                "missing instance relation credentials",
+                status=401,
+            )
+        return relation_id, relation_token
 
     @staticmethod
     def _optional_int(value: str | None) -> int | None:

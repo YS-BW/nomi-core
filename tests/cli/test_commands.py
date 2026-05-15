@@ -632,10 +632,11 @@ def test_instance_invite_code_prints_runtime_code(monkeypatch) -> None:
 
 
 def test_instance_key_reads_and_updates_config(monkeypatch) -> None:
-    """instance key 应支持读取和字段级保存当前实例 key。"""
+    """instance key 应支持读取、保存 key 并同步 SOUL.md。"""
     config = Config()
     config.instance.key = "default"
     saved: dict[str, object] = {}
+    synced: dict[str, object] = {}
 
     monkeypatch.setattr(
         "nomi.cli.commands.instance.load_runtime_config",
@@ -649,6 +650,11 @@ def test_instance_key_reads_and_updates_config(monkeypatch) -> None:
         "nomi.cli.commands.instance.get_config_path",
         lambda: Path("/tmp/config.json"),
     )
+    monkeypatch.setattr(
+        "nomi.cli.commands.instance.sync_instance_name_to_soul",
+        lambda workspace, name: synced.update({"workspace": workspace, "name": name})
+        or Path("/tmp/workspace/SOUL.md"),
+    )
 
     read_result = runner.invoke(app, ["instance", "key"])
     write_result = runner.invoke(app, ["instance", "key", "小美"])
@@ -659,6 +665,7 @@ def test_instance_key_reads_and_updates_config(monkeypatch) -> None:
     assert config.instance.key == "小美"
     assert saved["config"] is config
     assert saved["path"] == Path("/tmp/config.json")
+    assert synced == {"workspace": config.workspace_path, "name": "小美"}
 
 
 def test_instance_key_rejects_path_separator(monkeypatch) -> None:
@@ -685,7 +692,6 @@ def test_instance_relations_prints_table(monkeypatch) -> None:
     runtime.list_instance_relations.return_value = [
         {
             "key": "xmy",
-            "name": "小美",
             "url": "http://127.0.0.1:8766",
             "status": "friend",
             "permission": "chat",
@@ -703,7 +709,6 @@ def test_instance_relations_prints_table(monkeypatch) -> None:
     assert result.exit_code == 0
     stripped = _strip_ansi(result.stdout)
     assert "xmy" in stripped
-    assert "小美" in stripped
     assert "friend" in stripped
 
 
@@ -732,7 +737,7 @@ def test_instance_invite_from_code_calls_runtime(monkeypatch) -> None:
     )
 
 
-def test_instance_accept_reject_rename_send_call_runtime(monkeypatch) -> None:
+def test_instance_accept_reject_remove_send_call_runtime(monkeypatch) -> None:
     """instance 关系操作命令应调用 runtime。"""
     config = Config()
     runtime = MagicMock()
@@ -740,7 +745,9 @@ def test_instance_accept_reject_rename_send_call_runtime(monkeypatch) -> None:
         return_value={"key": "xmy", "permission": "chat"}
     )
     runtime.reject_instance_relation_async = AsyncMock(return_value=True)
-    runtime.rename_instance_relation.return_value = {"key": "xmy", "name": "小美"}
+    runtime.withdraw_instance_relation_request = AsyncMock(
+        return_value={"key": "xmy", "withdrawn": True}
+    )
     runtime.remove_instance_relation = AsyncMock(return_value={"key": "xmy", "removed": True})
     runtime.set_instance_relation_permission.return_value = {"key": "xmy", "permission": "all"}
     runtime.send_instance_message = AsyncMock(return_value={"content": "pong"})
@@ -753,20 +760,20 @@ def test_instance_accept_reject_rename_send_call_runtime(monkeypatch) -> None:
 
     accepted = runner.invoke(app, ["instance", "accept", "xmy", "--permission", "chat"])
     rejected = runner.invoke(app, ["instance", "reject", "xmy"])
-    renamed = runner.invoke(app, ["instance", "rename", "xmy", "小美"])
+    withdrawn = runner.invoke(app, ["instance", "withdraw", "xmy"])
     removed = runner.invoke(app, ["instance", "remove-relation", "xmy"])
     permission = runner.invoke(app, ["instance", "permission", "xmy", "all"])
     sent = runner.invoke(app, ["instance", "send", "xmy", "ping"])
 
     assert accepted.exit_code == 0
     assert rejected.exit_code == 0
-    assert renamed.exit_code == 0
+    assert withdrawn.exit_code == 0
     assert removed.exit_code == 0
     assert permission.exit_code == 0
     assert sent.exit_code == 0
     runtime.accept_instance_relation.assert_awaited_once_with("xmy", "chat")
     runtime.reject_instance_relation_async.assert_awaited_once_with("xmy")
-    runtime.rename_instance_relation.assert_called_once_with("xmy", "小美")
+    runtime.withdraw_instance_relation_request.assert_awaited_once_with("xmy")
     runtime.remove_instance_relation.assert_awaited_once_with("xmy")
     runtime.set_instance_relation_permission.assert_called_once_with("xmy", "all")
     runtime.send_instance_message.assert_awaited_once_with("xmy", "ping")

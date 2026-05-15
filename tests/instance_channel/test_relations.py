@@ -12,8 +12,9 @@ from nomi.agent.tools.instance_relations import (
     InstanceRelationAcceptTool,
     InstanceRelationListTool,
     InstanceRelationRejectTool,
-    InstanceRelationRenameTool,
+    InstanceRelationWithdrawTool,
     InstanceSendMessageTool,
+    InstanceSetNameTool,
     InstanceSessionGetTool,
     InstanceSessionListTool,
 )
@@ -94,9 +95,6 @@ def test_relation_manager_invite_request_relation_lifecycle(tmp_path) -> None:
     with pytest.raises(PermissionError):
         manager.require_permission("xmy", "all")
 
-    renamed = manager.rename("xmy", "小美")
-    assert renamed.name == "小美"
-
     trusted = manager.set_permission("xmy", "all")
     assert trusted.permission == "all"
     assert manager.require_permission("xmy", "all").key == "xmy"
@@ -143,6 +141,28 @@ def test_relation_manager_outgoing_accept_and_reject(tmp_path) -> None:
     assert manager.reject_outgoing("bomi") is True
     assert manager.get_relation("bomi") is None
 
+    manager.create_outgoing_request(
+        key="cici",
+        url="http://127.0.0.1:8768",
+        requested_permission="chat",
+        response_token="response-token-c",
+        invite_id="inv-3",
+    )
+    withdrawn = manager.withdraw_outgoing("cici")
+    assert withdrawn.key == "cici"
+    assert manager.get_request("cici") is None
+
+    manager.create_incoming_request(
+        key="dodo",
+        url="http://127.0.0.1:8769",
+        requested_permission="chat",
+        response_token="response-token-d",
+        invite_id="inv-4",
+    )
+    remote_withdrawn = manager.apply_remote_withdraw("dodo")
+    assert remote_withdrawn.key == "dodo"
+    assert manager.get_request("dodo") is None
+
 
 def test_notification_service_uses_global_reminder_queue() -> None:
     """NotificationService 应复用当前全局提醒队列。"""
@@ -173,12 +193,15 @@ async def test_instance_tools_call_runtime() -> None:
             return [
                 {
                     "key": "xmy",
-                    "name": "小美",
                     "url": "http://127.0.0.1:8766",
                     "status": "friend",
                     "permission": "chat",
                 }
             ]
+
+        def set_instance_name(self, name):
+            calls.append(("set_name", name))
+            return {"key": name}
 
         def build_instance_invite_code(self, public_url=None):
             calls.append(("invite_code", public_url))
@@ -196,9 +219,9 @@ async def test_instance_tools_call_runtime() -> None:
             calls.append(("reject", key))
             return True
 
-        def rename_instance_relation(self, key, name):
-            calls.append(("rename", key, name))
-            return {"key": key, "name": name}
+        async def withdraw_instance_relation_request(self, key):
+            calls.append(("withdraw", key))
+            return {"key": key, "withdrawn": True}
 
         async def remove_instance_relation(self, key):
             calls.append(("remove", key))
@@ -217,7 +240,6 @@ async def test_instance_tools_call_runtime() -> None:
             return [
                 {
                     "key": "xmy",
-                    "name": "小美",
                     "status": "friend",
                     "message_count": 2,
                     "updated_at": "2026-05-14T12:00:00",
@@ -228,7 +250,6 @@ async def test_instance_tools_call_runtime() -> None:
             calls.append(("session_get", key, limit))
             return {
                 "key": key,
-                "name": "小美",
                 "messages": [{"label": "我发给对方", "content": "ping"}],
             }
 
@@ -236,7 +257,10 @@ async def test_instance_tools_call_runtime() -> None:
 
     tool = InstanceInviteCodeTool(runtime)
     assert "public_url" not in tool.parameters["properties"]
-    assert "nomi://instance-invite" in await tool.execute()
+    invite_output = await tool.execute()
+    assert "nomi://instance-invite" in invite_output
+    assert "不能只发送 secret" in invite_output
+    assert "我现在叫 小美" in await InstanceSetNameTool(runtime).execute(name="小美")
     assert "已向" in await InstanceInviteTool(runtime).execute(
         invite_code=(
             "nomi://instance-invite?v=1&key=xmy&url=http%3A%2F%2F127.0.0.1%3A8766"
@@ -249,7 +273,7 @@ async def test_instance_tools_call_runtime() -> None:
         key="xmy", permission="chat"
     )
     assert "已拒绝" in await InstanceRelationRejectTool(runtime).execute(key="xmy")
-    assert "备注" in await InstanceRelationRenameTool(runtime).execute(key="xmy", name="小美")
+    assert "已撤回" in await InstanceRelationWithdrawTool(runtime).execute(key="xmy")
     from nomi.agent.tools.instance_relations import (
         InstanceRelationRemoveTool,
         InstanceRelationSetPermissionTool,
@@ -264,6 +288,7 @@ async def test_instance_tools_call_runtime() -> None:
     assert "我发给对方" in await InstanceSessionGetTool(runtime).execute(key="xmy", limit=5)
     assert calls == [
         ("invite_code", None),
+        ("set_name", "小美"),
         (
             "invite",
             "nomi://instance-invite?v=1&key=xmy&url=http%3A%2F%2F127.0.0.1%3A8766&invite_id=inv-1&secret=s",
@@ -271,7 +296,7 @@ async def test_instance_tools_call_runtime() -> None:
         ),
         ("accept", "xmy", "chat"),
         ("reject", "xmy"),
-        ("rename", "xmy", "小美"),
+        ("withdraw", "xmy"),
         ("remove", "xmy"),
         ("permission", "xmy", "all"),
         ("send", "xmy", "ping"),

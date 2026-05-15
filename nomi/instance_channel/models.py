@@ -93,7 +93,6 @@ class InstanceRelation:
     """描述一条已接受的外部 instance 关系。"""
 
     key: str
-    name: str
     url: str
     relation_id: str
     relation_token: str
@@ -112,7 +111,6 @@ class InstanceRelation:
             return None
         return cls(
             key=normalize_key(key),
-            name=str(payload.get("name") or "").strip(),
             url=url,
             relation_id=relation_id,
             relation_token=relation_token,

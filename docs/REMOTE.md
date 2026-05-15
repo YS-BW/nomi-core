@@ -268,13 +268,13 @@ mcp.disabled
 
 ## 任务投递语义
 
-任务执行结果通过实例级 reminder fanout。remote 收到投递后发送 `task.delivered`。
+任务执行结果通过实例级 reminder fanout。全局提醒会先写入实际 remote session，再通过 `session.message_appended` 推给 desktop；remote 不再为同一条全局提醒额外发送 `task.delivered`，避免 desktop 重复渲染。定向任务投递仍可发送 `task.delivered`。
 
 关键规则：
 
 - `session_id` 表示任务的源会话。
-- 全局提醒会投递给所有已运行入口。
-- 如果任务设置了 `target_channels` 且不包含 `remote`，desktop 不会收到这条 `task.delivered`。
+- 全局提醒会投递给所有已运行入口，desktop 通过 session 事件接收。
+- 如果任务设置了 `target_channels` 且不包含 `remote`，desktop 不会收到对应提醒。
 - 旧 `target_channel / target_chat_id` 不再作为 remote 创建任务的公开投递语义。
 
 ## 错误模型

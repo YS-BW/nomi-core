@@ -11,7 +11,7 @@
 - `TOOLS.md` 已从 `nomi/templates/workspace/` 移到 `nomi/templates/TOOLS.md`。
 - `sync_workspace_templates()` 不再生成 `workspace/TOOLS.md`。
 - system prompt 继续从包内 `TOOLS.md` 注入工具使用说明。
-- 新增配置字段 `instance.key`，默认由实例名推导，允许中文，不允许 `:` 或 `/`。
+- 新增配置字段 `instance.key`，默认是 `nomi`，允许中文，不允许 `:` 或 `/`。
 - 新增 `<instance-root>/instance-invite.json`，保存当前唯一有效一次性邀请码。
 - 新增 `<instance-root>/instance-requests.json`，只保存 pending incoming/outgoing 申请。
 - 重做 `<instance-root>/instance-relations.json`，只保存已接受关系，字段包含 `relation_id/relation_token/permission`。
@@ -21,8 +21,9 @@
   - `POST /v1/instance/relations/request`
   - `POST /v1/instance/relations/response`
   - `POST /v1/instance/messages`
-- 新增 `nomi instance key/invite-code/invite/relations/accept/reject/rename/remove-relation/permission/send`。
+- 新增 `nomi instance key/invite-code/invite/relations/accept/reject/remove-relation/permission/send`。
 - 新增 Agent 工具：
+  - `instance_set_name`
   - `instance_invite_code`
   - `instance_invite`
   - `instance_relation_list`
@@ -30,25 +31,29 @@
   - `instance_relation_reject`
   - `instance_relation_remove`
   - `instance_relation_set_permission`
-  - `instance_relation_rename`
   - `instance_send_message`
 - 新增 Agent 查询工具：
   - `instance_session_list`
   - `instance_session_get`
+- instance 来源消息会按本地 relation `permission` 暴露工具白名单：
+  - `chat`：instance 聊天、会话查询。
+  - `task`：`chat + task_*`。
+  - `all`：`task + 文件/命令/skill/MCP/instance 关系管理工具`。
+- instance 会话不能主动向本机用户发通知、提问或等待用户回复；用户要继续协商时，由用户会话再次调用 `instance_send_message`。
 - instance 消息进入 AgentLoop 时使用 `channel="instance"`、`sender_id="instance:<key>"`、`session_id="instance:<key>"`。
 - instance 聊天发送方也会写入本地 `instance:<key>` 会话，包含 outbound、reply、error 记录。
 - instance 聊天接收方会给本地 `instance:<key>` 会话消息补充 `channel/peer_key/direction/actor` metadata。
 - InstanceChannel 内部路由不再使用 remote token 表示好友身份：
   - 关系申请使用 `X-Nomi-Invite-Id + Bearer invite-secret`
   - 关系响应使用 `Bearer response-token`
-  - 删除和消息使用 `X-Nomi-Relation-Id + Bearer relation-token`
+- 删除和消息使用 `X-Nomi-Relation-Id + Bearer relation-token`
 - 补充 `docs/INSTANCE_CHANNEL.md`，并更新 `docs/INSTANCE.md`、`docs/TOOLS.md` 和内置 `nomi/templates/TOOLS.md`。
 
 当前边界：
 
 - InstanceChannel 共享 remote HTTP listener；接收方必须启用 remote。
 - 这三条 `/v1/instance/*` 路由是 core 内部实例通道，不进入 `nomi-protocol`。
-- 第一版不做自动发现、独立 service、独立端口、task_request、skill/MCP 授权执行。
+- 第一版不做自动发现、独立 service、独立端口和关系冲突自动改名。
 - 旧版 `instance-relations.json` 不迁移；缺少 `relation_id/relation_token/url` 的旧关系会 fail-closed，需要重新 invite。
 - 如果同一 key 已存在 relation 或 pending request，新的申请会直接拒绝。
 
@@ -56,13 +61,16 @@
 
 ```bash
 uv run python -m pytest tests/instance_channel/test_relations.py tests/runtime/test_remote_facade.py tests/remote/test_server.py tests/cli/test_commands.py tests/config/test_instance.py tests/config/test_schema_defaults.py -q
+uv run python -m pytest tests/instance_channel/test_relations.py tests/runtime/test_remote_facade.py tests/remote/test_server.py tests/agent/test_runner.py tests/agent/test_user_profile_flow.py tests/cli/test_commands.py -q
+uv run python -m pytest tests/runtime/test_remote_facade.py tests/instance_channel/test_relations.py tests/remote/test_server.py tests/agent/test_user_profile_flow.py -q
+uv run python -m compileall nomi tests -q
+uv run ruff check nomi tests --select F401,F841
 ```
 
 下一步：
 
-1. 运行 `compileall`、ruff 和更完整相关测试。
-2. 用两个临时 instance root 做真实 invite/accept/send smoke。
-3. smoke 通过后再整理提交。
+1. 用两个临时 instance root 做真实 invite/accept/send smoke。
+2. smoke 通过后再整理提交。
 
 ---
 

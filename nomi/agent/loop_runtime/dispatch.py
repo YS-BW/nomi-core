@@ -145,6 +145,7 @@ class DispatchRuntime:
         on_stream: Callable[[str], Awaitable[None]] | None = None,
         on_stream_end: Callable[..., Awaitable[None]] | None = None,
         persist_session: bool = True,
+        allowed_tool_names: set[str] | None = None,
     ) -> "DirectProcessResult":
         """直接处理一条消息，并返回完整执行结果。"""
         loop = self._loop
@@ -174,6 +175,7 @@ class DispatchRuntime:
                         on_stream=on_stream,
                         on_stream_end=on_stream_end,
                         persist_session=persist_session,
+                        allowed_tool_names=allowed_tool_names,
                     )
                 except asyncio.CancelledError:
                     interrupt_state = loop._consume_interrupt_state(normalized_key)

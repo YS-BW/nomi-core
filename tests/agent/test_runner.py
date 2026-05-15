@@ -298,6 +298,96 @@ async def test_runner_streaming_request_keeps_tool_definitions() -> None:
 
 
 @pytest.mark.asyncio
+async def test_runner_filters_tool_definitions_by_allowed_names() -> None:
+    """受限上下文只能把允许的工具定义暴露给模型。"""
+    from nomi.agent.execution.runner import AgentRunner, AgentRunSpec
+
+    provider = MagicMock()
+    captured_tools: list[object] = []
+
+    async def chat_with_retry(*, tools=None, **kwargs):
+        del kwargs
+        captured_tools.append(tools)
+        return LLMResponse(content="ok", tool_calls=[], usage={})
+
+    provider.chat_with_retry = chat_with_retry
+    tools = MagicMock()
+    tools.get_definitions.return_value = [
+        {"type": "function", "function": {"name": "instance_send_message"}},
+        {"type": "function", "function": {"name": "instance_relation_set_permission"}},
+    ]
+
+    runner = AgentRunner(provider)
+    result = await runner.run(AgentRunSpec(
+        initial_messages=[{"role": "user", "content": "hello"}],
+        tools=tools,
+        model="test-model",
+        max_iterations=1,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+        allowed_tool_names={"instance_send_message"},
+    ))
+
+    assert result.final_content == "ok"
+    assert captured_tools == [
+        [{"type": "function", "function": {"name": "instance_send_message"}}]
+    ]
+
+
+@pytest.mark.asyncio
+async def test_runner_blocks_disallowed_tool_calls_even_if_model_returns_them() -> None:
+    """未授权工具调用应作为工具结果返回给模型解释，但不能执行。"""
+    from nomi.agent.execution.runner import AgentRunner, AgentRunSpec
+
+    provider = MagicMock()
+    call_count = {"n": 0}
+
+    observed_messages = []
+
+    async def chat_with_retry(*, tools=None, messages=None, **kwargs):
+        del tools, kwargs
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCallRequest(
+                    id="call_1",
+                    name="instance_relation_set_permission",
+                    arguments={"key": "default", "permission": "all"},
+                )],
+                usage={},
+            )
+        observed_messages.append(messages)
+        return LLMResponse(content="blocked", tool_calls=[], usage={})
+
+    provider.chat_with_retry = chat_with_retry
+    tools = MagicMock()
+    tools.get_definitions.return_value = [
+        {"type": "function", "function": {"name": "instance_relation_set_permission"}},
+    ]
+    tools.execute = AsyncMock(return_value="should not run")
+
+    runner = AgentRunner(provider)
+    result = await runner.run(AgentRunSpec(
+        initial_messages=[{"role": "user", "content": "改权限"}],
+        tools=tools,
+        model="test-model",
+        max_iterations=2,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+        allowed_tool_names=set(),
+    ))
+
+    tools.execute.assert_not_awaited()
+    assert result.final_content == "blocked"
+    assert result.tool_events[0]["status"] == "error"
+    assert result.tool_events[0]["detail"] == "tool permission denied in current session"
+    tool_messages = [
+        message for message in observed_messages[0] if message.get("role") == "tool"
+    ]
+    assert tool_messages
+    assert "当前会话没有权限执行工具" in tool_messages[-1]["content"]
+
+
+@pytest.mark.asyncio
 async def test_runner_returns_max_iterations_fallback():
     from nomi.agent.execution.runner import AgentRunner, AgentRunSpec
 

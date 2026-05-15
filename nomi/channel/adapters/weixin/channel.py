@@ -39,6 +39,9 @@ MESSAGE_TYPE_BOT = 2
 MESSAGE_STATE_FINISH = 2
 WEIXIN_MAX_MESSAGE_LEN = 4000
 WEIXIN_CHANNEL_VERSION = "2.1.1"
+WEIXIN_MEDIA_TYPE_IMAGE = 1
+WEIXIN_MEDIA_TYPE_VIDEO = 2
+WEIXIN_MEDIA_TYPE_FILE = 3
 ILINK_APP_ID = "bot"
 WEIXIN_CDN_BASE_URL = "https://novac2c.cdn.weixin.qq.com/c2c"
 _WEIXIN_INBOUND_TEXT = {
@@ -120,6 +123,20 @@ def _decrypt_aes_ecb(data: bytes, aes_key_b64: str) -> bytes:
     decryptor = Cipher(algorithms.AES(key), modes.ECB()).decryptor()
     decrypted = decryptor.update(data) + decryptor.finalize()
     return _pkcs7_unpad_safe(decrypted)
+
+
+def _encrypt_aes_ecb(data: bytes, key: bytes) -> bytes:
+    """按微信媒体协议执行 AES-128-ECB 加密。"""
+    try:
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    except ImportError as exc:
+        raise RuntimeError("cryptography is required for weixin media upload") from exc
+
+    block_size = 16
+    pad_len = block_size - (len(data) % block_size)
+    padded = data + bytes([pad_len]) * pad_len
+    encryptor = Cipher(algorithms.AES(key), modes.ECB()).encryptor()
+    return encryptor.update(padded) + encryptor.finalize()
 
 
 def _detect_voice_suffix(raw: bytes) -> str:
@@ -431,6 +448,27 @@ class WeixinChannel(BaseChannel):
             },
         )
 
+    async def _get_upload_url(
+        self,
+        chat_id: str,
+        context_token: str,
+        media_type: int,
+        *,
+        no_need_thumb: bool = False,
+        aes_key_hex: str = "",
+    ) -> dict[str, Any]:
+        """向微信申请媒体上传地址。"""
+        payload: dict[str, Any] = {
+            "ilink_user_id": chat_id,
+            "context_token": context_token,
+            "media_type": media_type,
+        }
+        if no_need_thumb:
+            payload["no_need_thumb"] = True
+        if aes_key_hex:
+            payload["aes_key"] = aes_key_hex
+        return await self._api_post("ilink/bot/getuploadurl", payload)
+
     async def _ensure_typing_ticket(self, chat_id: str, context_token: str) -> str:
         """按用户获取并缓存 typing_ticket。"""
         cached = self._typing_tickets.get(chat_id, "")
@@ -719,6 +757,104 @@ class WeixinChannel(BaseChannel):
                         {
                             "type": ITEM_TEXT,
                             "text_item": {"text": text},
+                        }
+                    ],
+                }
+            },
+        )
+        errcode = int(data.get("errcode", 0) or 0)
+        if errcode != 0:
+            raise RuntimeError(f"Weixin sendmessage failed: errcode={errcode} data={data}")
+
+    async def _upload_media_bytes(
+        self,
+        upload_url: str,
+        upload_param: str,
+        raw: bytes,
+        *,
+        aes_key: bytes,
+    ) -> str:
+        """上传一份加密后的微信媒体，并返回 encrypt_query_param。"""
+        assert self._client is not None
+        encrypted = _encrypt_aes_ecb(raw, aes_key)
+        separator = "&" if "?" in upload_url else "?"
+        target = f"{upload_url}{separator}{upload_param}" if upload_param else upload_url
+        response = await self._client.post(
+            target,
+            content=encrypted,
+            headers={
+                "Content-Type": "application/octet-stream",
+                "User-Agent": USER_AGENT,
+            },
+        )
+        response.raise_for_status()
+        encrypted_param = str(response.headers.get("x-encrypted-param", "") or "").strip()
+        if not encrypted_param:
+            raise RuntimeError("Weixin media upload missing x-encrypted-param header")
+        return encrypted_param
+
+    async def _send_file_message(self, chat_id: str, context_token: str, file_path: str) -> None:
+        """发送一条微信文件消息。"""
+        path = Path(file_path).expanduser()
+        if not path.is_file():
+            raise FileNotFoundError(f"weixin outbound file not found: {path}")
+
+        raw = path.read_bytes()
+        aes_key = os.urandom(16)
+        aes_key_hex = aes_key.hex()
+        upload_info = await self._get_upload_url(
+            chat_id,
+            context_token,
+            WEIXIN_MEDIA_TYPE_FILE,
+            no_need_thumb=True,
+            aes_key_hex=aes_key_hex,
+        )
+        upload_url = str(
+            upload_info.get("upload_url")
+            or upload_info.get("url")
+            or upload_info.get("uploadUrl")
+            or ""
+        ).strip()
+        upload_param = str(
+            upload_info.get("upload_param")
+            or upload_info.get("upload_params")
+            or upload_info.get("uploadParam")
+            or ""
+        ).strip()
+        if not upload_url:
+            raise RuntimeError(f"Weixin getuploadurl missing upload_url: {upload_info}")
+
+        encrypt_query_param = await self._upload_media_bytes(
+            upload_url,
+            upload_param,
+            raw,
+            aes_key=aes_key,
+        )
+        mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        await self._sleep_before_send(path.name)
+        data = await self._api_post(
+            "ilink/bot/sendmessage",
+            {
+                "msg": {
+                    "from_user_id": "",
+                    "to_user_id": chat_id,
+                    "client_id": f"nomi-{uuid.uuid4().hex[:12]}",
+                    "message_type": MESSAGE_TYPE_BOT,
+                    "message_state": MESSAGE_STATE_FINISH,
+                    "context_token": context_token,
+                    "item_list": [
+                        {
+                            "type": ITEM_FILE,
+                            "file_item": {
+                                "file_name": path.name,
+                                "mime_type": mime,
+                                "file_size": len(raw),
+                                "aes_key": base64.b64encode(aes_key).decode("ascii"),
+                                "aes_key_hex": aes_key_hex,
+                                "media": {
+                                    "encrypt_query_param": encrypt_query_param,
+                                },
+                            },
                         }
                     ],
                 }
@@ -1017,6 +1153,16 @@ class WeixinChannel(BaseChannel):
         if not context_token:
             logger.warning("No weixin context token for {}; drop outbound message.", message.chat_id)
             return
+
+        for media_path in list(message.media or []):
+            try:
+                path = Path(str(media_path or "")).expanduser()
+                if not path.is_file():
+                    logger.warning("Weixin outbound media not found: {}", media_path)
+                    continue
+                await self._send_file_message(message.chat_id, context_token, str(path))
+            except Exception as exc:
+                logger.warning("Weixin outbound file send failed for {}: {}", media_path, exc)
 
         content = str(message.content or "").strip()
         if not content:

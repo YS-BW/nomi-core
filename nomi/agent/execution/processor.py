@@ -213,6 +213,8 @@ class TurnProcessor:
         chat_id: str = "direct",
         message_id: str | None = None,
         pending_queue: asyncio.Queue | None = None,
+        allowed_tool_names: set[str] | None = None,
+        persist_runtime_state: bool = True,
     ) -> tuple[str | None, list[str], list[dict], str, bool, bool]:
         """执行一轮 agent tool loop。"""
         loop = self._loop
@@ -225,14 +227,18 @@ class TurnProcessor:
             chat_id=chat_id,
             message_id=message_id,
             session_key=session.key if session is not None else None,
-            turn_journal=self.get_or_create_turn_journal(session),
+            turn_journal=(
+                self.get_or_create_turn_journal(session)
+                if persist_runtime_state
+                else None
+            ),
         )
         hook: AgentHook = (
             CompositeHook([loop_hook] + loop._extra_hooks) if loop._extra_hooks else loop_hook
         )
 
         async def _checkpoint(payload: dict[str, Any]) -> None:
-            if session is None:
+            if session is None or not persist_runtime_state:
                 return
             self.set_runtime_checkpoint(session, payload)
 
@@ -243,7 +249,7 @@ class TurnProcessor:
             result: Any,
             error: str | None,
         ) -> None:
-            if session is None:
+            if session is None or not persist_runtime_state:
                 return
             journal = self.get_or_create_turn_journal(session)
             if journal is None:
@@ -313,6 +319,7 @@ class TurnProcessor:
                 checkpoint_callback=_checkpoint,
                 injection_callback=_drain_pending,
                 tool_status_callback=_tool_status,
+                allowed_tool_names=allowed_tool_names,
             )
         )
         loop._state.last_usage = result.usage
@@ -339,11 +346,16 @@ class TurnProcessor:
         on_stream_end: Callable[..., Awaitable[None]] | None = None,
         pending_queue: asyncio.Queue | None = None,
         persist_session: bool = True,
+        allowed_tool_names: set[str] | None = None,
     ) -> DirectProcessResult:
         """处理单条消息，并返回完整执行结果。"""
         loop = self._loop
         preview = msg.content[:80] + "..." if len(msg.content) > 80 else msg.content
         logger.info("Processing message from {}:{}: {}", msg.channel, msg.sender_id, preview)
+        is_instance_channel = str(msg.channel or "").strip().lower() == "instance"
+        effective_allowed_tool_names = (
+            set() if is_instance_channel and allowed_tool_names is None else allowed_tool_names
+        )
 
         key = session_key or msg.session_key
         session = loop.sessions.get_or_create(key) if persist_session else Session(key=key)
@@ -361,7 +373,7 @@ class TurnProcessor:
 
         session, pending = loop.auto_compact.prepare_session(session, key)
         interrupted_context = self.build_interrupted_runtime_context(session)
-        turn_journal = self.get_or_create_turn_journal(session)
+        turn_journal = self.get_or_create_turn_journal(session) if persist_session else None
         if turn_journal is not None and turn_journal.user_message is None:
             turn_journal.user_message = {
                 "role": "user",
@@ -370,7 +382,7 @@ class TurnProcessor:
             turn_journal.touch()
             loop.turn_journals.save(turn_journal)
 
-        quick_action = loop.user_profile.detect_quick_action(
+        quick_action = None if is_instance_channel else loop.user_profile.detect_quick_action(
             session_key=key,
             text=msg.content,
         )
@@ -402,30 +414,9 @@ class TurnProcessor:
                 session_key=key,
             )
 
-        instance_relation_handler = getattr(
-            loop,
-            "instance_relation_quick_action_handler",
-            None,
-        )
-        if instance_relation_handler is not None:
-            instance_relation_result = await instance_relation_handler(msg.content)
-            if instance_relation_result is not None:
-                loop._clear_interrupt_state(key)
-                return DirectProcessResult(
-                    outbound=OutboundMessage(
-                        channel=msg.channel,
-                        chat_id=msg.chat_id,
-                        content=instance_relation_result,
-                        metadata=dict(msg.metadata or {}),
-                    ),
-                    final_content=instance_relation_result,
-                    stop_reason="instance_relation_quick_action",
-                    session_key=key,
-                )
-
         raw = msg.content.strip()
         ctx = loop._build_command_context(msg=msg, session=session, key=key, raw=raw)
-        if result := await loop.commands.dispatch(ctx):
+        if not is_instance_channel and (result := await loop.commands.dispatch(ctx)):
             loop._clear_interrupt_state(key)
             return DirectProcessResult(
                 outbound=result,
@@ -441,11 +432,12 @@ class TurnProcessor:
             msg.metadata.get("message_id"),
             key,
         )
-        self.record_explicit_skill_mentions(
-            msg.content,
-            channel=msg.channel,
-            chat_id=msg.chat_id,
-        )
+        if not is_instance_channel:
+            self.record_explicit_skill_mentions(
+                msg.content,
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+            )
 
         history = session.get_history(max_messages=0)
         initial_messages = loop.context.build_messages(
@@ -485,6 +477,8 @@ class TurnProcessor:
                 chat_id=msg.chat_id,
                 message_id=msg.metadata.get("message_id"),
                 pending_queue=pending_queue,
+                allowed_tool_names=effective_allowed_tool_names,
+                persist_runtime_state=persist_session,
             )
         )
 
@@ -502,7 +496,7 @@ class TurnProcessor:
         logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
 
         reminder = None
-        if loop.user_profile.should_attempt_extraction(
+        if not is_instance_channel and loop.user_profile.should_attempt_extraction(
             user_text=msg.content,
             assistant_text=final_content,
             stop_reason=stop_reason,
